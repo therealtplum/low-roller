@@ -1,17 +1,37 @@
-//
-//  LowRollerApp.swift
-//  LowRoller
-//
-//  Created by Thomas Plummer on 10/22/25.
-//
-
+// LowRollerApp.swift
 import SwiftUI
+import Combine
+import Foundation
+
+// Keep this single definition in the project.
+extension Notification.Name {
+    static let lowRollerBackToLobby = Notification.Name("lowRollerBackToLobby")
+}
 
 @main
 struct LowRollerApp: App {
+    @State private var engine: GameEngine? = nil
+    @AppStorage("lowroller_name_ios") private var storedName: String = "You"
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            Group {
+                if let engine {
+                    GameView(engine: engine)
+                        .onReceive(NotificationCenter.default.publisher(for: .lowRollerBackToLobby)) { _ in
+                            self.engine = nil
+                        }
+                } else {
+                    // Lobby → builds engine and hands it back
+                    PreGameView(youName: storedName, start: { newEngine in
+                        if let newName = newEngine.state.players.first?.display, !newName.isEmpty {
+                            self.storedName = newName
+                        }
+                        self.engine = newEngine
+                    })
+                }
+            }
+            .preferredColorScheme(.dark)
         }
     }
 }

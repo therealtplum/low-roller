@@ -30,37 +30,54 @@ struct GameView: View {
                         .foregroundStyle(.secondary)
                         .padding()
                 } else {
+                    // --- 2 columns, ALWAYS fits up to 7 dice on screen (no scrolling needed) ---
                     GeometryReader { geo in
-                        // Big dice: ~2 per row, adaptive to width
-                        let w: CGFloat = geo.size.width
-                        let horizontalPadding: CGFloat = 32
-                        let targetPerRow: CGFloat = 2
-                        let spacing: CGFloat = 12
-                        let usable = max(0, w - horizontalPadding)
-                        let rawCell = (usable / targetPerRow)
-                        let minSize = max(CGFloat(90), min(CGFloat(180), rawCell - spacing))
-                        let columns: [GridItem] = [ GridItem(.adaptive(minimum: minSize), spacing: spacing) ]
+                        // Layout constants
+                        let outerHPad: CGFloat = 32      // must match container .padding(.horizontal) below
+                        let spacing: CGFloat = 14        // gap between dice and rows
+                        let vPad: CGFloat = 20           // extra vertical breathing room inside grid
+                        let minDie: CGFloat = 78         // lower bound so dice stay tappable
+                        let maxDiePhone: CGFloat = 112   // upper bound so 4 rows always fit on iPhone portrait
 
-                        ScrollView {
-                            LazyVGrid(columns: columns, alignment: .center, spacing: spacing) {
-                                ForEach(Array(engine.state.lastFaces.enumerated()), id: \.offset) { (i, f) in
-                                    DiceView(face: f, selected: picked.contains(i), size: minSize)
-                                        .onTapGesture {
-                                            guard isYourTurn, !isFinished else { return }
-                                            withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                                                if picked.contains(i) { picked.remove(i) } else { picked.insert(i) }
-                                            }
+                        // Content counts
+                        let count = max(0, engine.state.lastFaces.count)
+                        let rows = max(1, Int(ceil(Double(count) / 2.0)))  // 2 per row → up to 4 rows for 7 dice
+
+                        // Width-constrained size (2 cols)
+                        let usableW = max(0, geo.size.width - outerHPad)
+                        let dieW = (usableW - spacing) / 2.0
+
+                        // Height-constrained size (rows tall)
+                        let usableH = max(0, geo.size.height - vPad - CGFloat(max(0, rows - 1)) * spacing)
+                        let dieH = usableH / CGFloat(rows)
+
+                        // Final die size: respect both axes and clamp to safe range
+                        let dieSize = max(minDie, min(maxDiePhone, floor(min(dieW, dieH))))
+
+                        let columns: [GridItem] = [
+                            GridItem(.fixed(dieSize), spacing: spacing, alignment: .center),
+                            GridItem(.fixed(dieSize), spacing: spacing, alignment: .center),
+                        ]
+
+                        LazyVGrid(columns: columns, alignment: .center, spacing: spacing) {
+                            ForEach(Array(engine.state.lastFaces.enumerated()), id: \.offset) { (i, f) in
+                                DiceView(face: f, selected: picked.contains(i), size: dieSize)
+                                    .onTapGesture {
+                                        guard isYourTurn, !isFinished else { return }
+                                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                                            if picked.contains(i) { picked.remove(i) } else { picked.insert(i) }
                                         }
-                                }
+                                    }
                             }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 10)
                         }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     }
-                    .frame(minHeight: 240)
                 }
             }
             .padding(.horizontal)
+            .frame(minHeight: 360) // give the dice zone enough room on small phones
 
             HStack {
                 Button("Roll") {
@@ -113,7 +130,6 @@ struct GameView: View {
         .onDisappear {
             turnTimer?.invalidate(); turnTimer = nil
         }
-        // iOS 16/17-friendly onChange (see extension below)
         .onChangeCompat(engine.state.turnIdx) { _, _ in
             picked.removeAll()
             scheduleTurnTimer()

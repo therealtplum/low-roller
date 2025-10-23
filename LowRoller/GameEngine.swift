@@ -39,12 +39,19 @@ final class GameEngine: ObservableObject {
     /// Tie-breaker: earliest player in order (adjust if you have different rules).
     private func computeWinnerIndex() -> Int? {
         guard !state.players.isEmpty else { return nil }
-        return state.players.enumerated()
-            .min(by: { totalPoints(for: $0.element) < totalPoints(for: $1.element) })?
-            .offset
+        let totals = state.players.map { totalPoints(for: $0) }
+        guard let minTotal = totals.min() else { return nil }
+        let leaders = totals.enumerated().filter { $0.element == minTotal }
+        return leaders.count == 1 ? leaders[0].offset : nil  // nil => tie
     }
 
     // MARK: - Actions
+    private func startSuddenDeath() {
+        state.phase = .suddenDeath
+        state.suddenRound &+= 1
+        state.suddenFaces = SuddenFaces(p0: nil, p1: nil)
+    }
+    
     func roll() {
         guard !isFinished else { return }
         guard state.remainingDice > 0 else { return }
@@ -73,17 +80,15 @@ final class GameEngine: ObservableObject {
 
         if state.turnsTaken >= state.players.count {
             // Match ends after each player has taken a turn.
-            state.phase = .finished
-
-            // Compute winner *now* and broadcast whether a human won.
             if let wIdx = computeWinnerIndex() {
+                state.winnerIdx = wIdx
+                state.phase = .finished
                 let humanWon = !state.players[wIdx].isBot
                 NotificationCenter.default.post(name: .humanWonMatch, object: humanWon)
             } else {
-                // Edge case: no winner (shouldn't happen), broadcast false.
-                NotificationCenter.default.post(name: .humanWonMatch, object: false)
+                // Tie on totals => Sudden Death
+                startSuddenDeath()
             }
-
         } else {
             // Next player's turn
             state.turnIdx = (state.turnIdx + 1) % state.players.count
@@ -93,6 +98,31 @@ final class GameEngine: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func resolveSuddenDeathRoll() -> Int? {
+        // assume two players at indices 0 and 1; change if you support >2
+        guard state.players.count >= 2 else { return nil }
+        let p0Face = Int.random(in: 1...6, using: &rng)
+        let p1Face = Int.random(in: 1...6, using: &rng)
+        state.suddenFaces = SuddenFaces(p0: p0Face, p1: p1Face)
+
+        let p0 = score(p0Face) // 3 -> 0
+        let p1 = score(p1Face)
+
+        if p0 == p1 {
+            // tie again; remain in .suddenDeath and let UI roll again
+            return nil
+        }
+
+        let winner = (p0 < p1) ? 0 : 1  // LOW score wins
+        state.winnerIdx = winner
+        state.phase = .finished
+
+        let humanWon = !state.players[winner].isBot
+        NotificationCenter.default.post(name: .humanWonMatch, object: humanWon)
+        return winner
+    }
+    
     // Fallback/bot move: pick all 3s, else single lowest
     func fallbackPick() {
         guard !isFinished else { return }

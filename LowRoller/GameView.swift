@@ -19,8 +19,16 @@ struct GameView: View {
     // Ensure leaderboard is written once per game
     @State private var wroteOutcome = false
 
+    // Sudden Death animation overlay state
+    @State private var sdShowOverlay = false
+    @State private var sdRolling = false
+    @State private var sdUserAnimFace: Int = 1
+    @State private var sdBotAnimFace: Int = 1
+    @State private var sdRollTimer: Timer?
+
     private var isYourTurn: Bool { !engine.state.players[engine.state.turnIdx].isBot }
     private var isFinished: Bool { engine.state.phase == .finished }
+    private var isSuddenDeath: Bool { engine.state.phase == .suddenDeath }
 
     var body: some View {
         ZStack {
@@ -82,6 +90,36 @@ struct GameView: View {
                 .padding(.horizontal)
                 .frame(minHeight: 360)
 
+                // --- Sudden Death UI ---
+                if isSuddenDeath {
+                    VStack(spacing: 10) {
+                        Text("Sudden Death!")
+                            .font(.title2).bold()
+                        Text("One roll each. Low score wins.")
+                            .foregroundStyle(.secondary)
+
+                        // Show most recent results (if any) below the button in the normal flow
+                        if let a = engine.state.suddenFaces.p0, let b = engine.state.suddenFaces.p1 {
+                            let aAdj = (a == 3) ? 0 : a
+                            let bAdj = (b == 3) ? 0 : b
+                            Text("Last: You \(a) → \(aAdj)   •   Bot \(b) → \(bAdj)")
+                                .monospaced()
+                        }
+
+                        Button {
+                            startSuddenDeathAnimationAndResolve()
+                        } label: {
+                            Text(engine.state.suddenFaces.p0 == nil ? "Roll Sudden Death" : "Roll Again")
+                                .font(.title3.weight(.bold))
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                        .padding(.horizontal)
+                    }
+                }
+
                 // --- Primary buttons (Roll + Set Aside) ---
                 HStack(spacing: 20) {
                     Button {
@@ -99,7 +137,7 @@ struct GameView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
-                    .disabled(!isYourTurn || isFinished || !engine.state.lastFaces.isEmpty || engine.state.remainingDice == 0)
+                    .disabled(!isYourTurn || isFinished || isSuddenDeath || !engine.state.lastFaces.isEmpty || engine.state.remainingDice == 0)
 
                     Button {
                         guard isYourTurn, !isFinished, !picked.isEmpty else { return }
@@ -114,7 +152,7 @@ struct GameView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.blue)
-                    .disabled(!isYourTurn || isFinished || picked.isEmpty)
+                    .disabled(!isYourTurn || isFinished || isSuddenDeath || picked.isEmpty)
                 }
                 .padding(.horizontal)
                 .padding(.top, 4)
@@ -136,12 +174,21 @@ struct GameView: View {
                         .clipShape(Capsule())
                 }
                 .padding(.top, 4)
-                .disabled(isFinished)
+                .disabled(isFinished || isSuddenDeath)
 
                 // --- End of Game UI (read-only) ---
                 if isFinished {
-                    // Display-only winner (lowest total score)
-                    let winner = engine.state.players.min(by: { $0.totalScore < $1.totalScore })!
+                    // Prefer the engine's winnerIdx (covers Sudden Death),
+                    // fall back to lowest total if somehow nil.
+                    let winner: Player = {
+                        if let idx = engine.state.winnerIdx,
+                           engine.state.players.indices.contains(idx) {
+                            return engine.state.players[idx]
+                        } else {
+                            return engine.state.players.min(by: { $0.totalScore < $1.totalScore })!
+                        }
+                    }()
+
                     VStack(spacing: 6) {
                         Text("Game Over").font(.headline)
                         Text("Winner: \(winner.display) • Total: \(winner.totalScore) • Pot: $\(engine.state.potCents/100)")
@@ -162,6 +209,49 @@ struct GameView: View {
             ConfettiView(isActive: $showConfetti, intensity: 1.2, fallDuration: 3.0)
                 .allowsHitTesting(false)
                 .ignoresSafeArea()
+
+            // ---- Sudden Death animation overlay (on top even if phase flips to .finished) ----
+            if sdShowOverlay {
+                Color.black.opacity(0.55).ignoresSafeArea()
+                VStack(spacing: 14) {
+                    Text(sdRolling ? "Rolling…" : "Sudden Death Result")
+                        .font(.title3.weight(.semibold))
+
+                    HStack(spacing: 28) {
+                        VStack(spacing: 8) {
+                            Text("You").font(.caption).foregroundStyle(.secondary)
+                            DiceView(face: sdRolling ? sdUserAnimFace : (engine.state.suddenFaces.p0 ?? sdUserAnimFace),
+                                     selected: false,
+                                     size: 96,
+                                     shakeToken: rollShake)
+                        }
+                        VStack(spacing: 8) {
+                            Text("Bot").font(.caption).foregroundStyle(.secondary)
+                            DiceView(face: sdRolling ? sdBotAnimFace : (engine.state.suddenFaces.p1 ?? sdBotAnimFace),
+                                     selected: false,
+                                     size: 96,
+                                     shakeToken: rollShake)
+                        }
+                    }
+
+                    if !sdRolling, let a = engine.state.suddenFaces.p0, let b = engine.state.suddenFaces.p1 {
+                        let aAdj = (a == 3) ? 0 : a
+                        let bAdj = (b == 3) ? 0 : b
+                        Text("You \(a) → \(aAdj)   •   Bot \(b) → \(bAdj)")
+                            .monospaced()
+                            .padding(.top, 2)
+                    }
+                }
+                .padding(20)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color(white: 0.12))
+                        .shadow(radius: 12)
+                )
+                .padding(.horizontal, 24)
+                .transition(.opacity.combined(with: .scale))
+                .animation(.easeInOut(duration: 0.2), value: sdShowOverlay)
+            }
         }
         .onAppear {
             wroteOutcome = false
@@ -172,6 +262,7 @@ struct GameView: View {
         }
         .onDisappear {
             turnTimer?.invalidate(); turnTimer = nil
+            stopSuddenDeathRollTimer()
         }
         // Listen for the engine's "human won" signal and fire confetti
         .onReceive(NotificationCenter.default.publisher(for: .humanWonMatch)) { note in
@@ -201,14 +292,55 @@ struct GameView: View {
         }
     }
 
+    // MARK: - Sudden Death animation driver
+    private func startSuddenDeathAnimationAndResolve() {
+        // Prepare overlay
+        sdShowOverlay = true
+        sdRolling = true
+        withAnimation(.easeOut(duration: 0.2)) { rollShake &+= 1 }
+
+        // Spin the dice faces rapidly until we reveal the true result
+        stopSuddenDeathRollTimer()
+        sdRollTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { _ in
+            sdUserAnimFace = Int.random(in: 1...6)
+            sdBotAnimFace = Int.random(in: 1...6)
+        }
+        if let t = sdRollTimer { RunLoop.main.add(t, forMode: .common) }
+
+        // After a short delay, resolve in the engine and reveal the result
+        let impact = UIImpactFeedbackGenerator(style: .heavy)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            _ = engine.resolveSuddenDeathRoll()
+            impact.impactOccurred()
+
+            // Stop rolling visuals and show the actual faces for a beat
+            stopSuddenDeathRollTimer()
+            sdRolling = false
+
+            // Let the user see the result before transitioning to Game Over
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    sdShowOverlay = false
+                }
+            }
+        }
+    }
+
+    private func stopSuddenDeathRollTimer() {
+        sdRollTimer?.invalidate()
+        sdRollTimer = nil
+    }
+
     private func writeOutcomeIfNeeded() {
         guard !wroteOutcome else { return }
 
         let players = engine.state.players
         guard !players.isEmpty else { return }
 
-        // Determine winner index by lowest total score
-        let winnerIdx = players.indices.min(by: { players[$0].totalScore < players[$1].totalScore }) ?? 0
+        // Prefer engine's winnerIdx (covers Sudden Death),
+        // fallback to lowest total for legacy states.
+        let winnerIdx = engine.state.winnerIdx
+            ?? (players.indices.min { players[$0].totalScore < players[$1].totalScore } ?? 0)
 
         // Use canonical display names for storage
         let winnerDisplay = players[winnerIdx].display
@@ -223,8 +355,6 @@ struct GameView: View {
         )
 
         wroteOutcome = true
-        // Optional: debug log
-        // print("[Leaderboard] WIN:", winnerDisplay, "LOSERS:", losers)
     }
 
     private func fireConfetti() {

@@ -18,9 +18,10 @@ struct GameView: View {
     private var isFinished: Bool { engine.state.phase == .finished }
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 16) {
             HUDView(engine: engine, timeLeft: timeLeft)
 
+            // --- Dice area ---
             ZStack {
                 RoundedRectangle(cornerRadius: 14)
                     .fill(Color.black.opacity(0.15))
@@ -30,28 +31,21 @@ struct GameView: View {
                         .foregroundStyle(.secondary)
                         .padding()
                 } else {
-                    // --- 2 columns, ALWAYS fits up to 7 dice on screen (no scrolling needed) ---
                     GeometryReader { geo in
-                        // Layout constants
-                        let outerHPad: CGFloat = 32      // must match container .padding(.horizontal) below
-                        let spacing: CGFloat = 14        // gap between dice and rows
-                        let vPad: CGFloat = 20           // extra vertical breathing room inside grid
-                        let minDie: CGFloat = 78         // lower bound so dice stay tappable
-                        let maxDiePhone: CGFloat = 112   // upper bound so 4 rows always fit on iPhone portrait
+                        let outerHPad: CGFloat = 32
+                        let spacing: CGFloat = 14
+                        let vPad: CGFloat = 20
+                        let minDie: CGFloat = 78
+                        let maxDiePhone: CGFloat = 112
 
-                        // Content counts
                         let count = max(0, engine.state.lastFaces.count)
-                        let rows = max(1, Int(ceil(Double(count) / 2.0)))  // 2 per row → up to 4 rows for 7 dice
+                        let rows = max(1, Int(ceil(Double(count) / 2.0)))
 
-                        // Width-constrained size (2 cols)
                         let usableW = max(0, geo.size.width - outerHPad)
                         let dieW = (usableW - spacing) / 2.0
-
-                        // Height-constrained size (rows tall)
                         let usableH = max(0, geo.size.height - vPad - CGFloat(max(0, rows - 1)) * spacing)
                         let dieH = usableH / CGFloat(rows)
 
-                        // Final die size: respect both axes and clamp to safe range
                         let dieSize = max(minDie, min(maxDiePhone, floor(min(dieW, dieH))))
 
                         let columns: [GridItem] = [
@@ -77,32 +71,56 @@ struct GameView: View {
                 }
             }
             .padding(.horizontal)
-            .frame(minHeight: 360) // give the dice zone enough room on small phones
+            .frame(minHeight: 360)
 
-            HStack {
-                Button("Roll") {
+            // --- Primary buttons (Roll + Set Aside) ---
+            HStack(spacing: 20) {
+                Button {
                     guard isYourTurn, !isFinished, engine.state.lastFaces.isEmpty else { return }
                     withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { engine.roll() }
+                } label: {
+                    Label("Roll", systemImage: "dice.fill")
+                        .font(.title3.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(.green)
                 .disabled(!isYourTurn || isFinished || !engine.state.lastFaces.isEmpty || engine.state.remainingDice == 0)
 
-                Button("Set Aside") {
+                Button {
                     guard isYourTurn, !isFinished, !picked.isEmpty else { return }
                     UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
                     engine.pick(indices: Array(picked))
                     picked.removeAll()
+                } label: {
+                    Label("Set Aside", systemImage: "hand.tap.fill")
+                        .font(.title3.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(.blue)
                 .disabled(!isYourTurn || isFinished || picked.isEmpty)
+            }
+            .padding(.horizontal)
+            .padding(.top, 4)
 
-                Button("Timeout Fallback") {
-                    if engine.state.lastFaces.isEmpty && engine.state.remainingDice > 0 { engine.roll() }
-                    engine.fallbackPick()
-                }
-                .buttonStyle(.bordered)
-                .disabled(isFinished)
+            // --- Timeout fallback (secondary button) ---
+            Button {
+                if engine.state.lastFaces.isEmpty && engine.state.remainingDice > 0 { engine.roll() }
+                engine.fallbackPick()
+            } label: {
+                Text("Timeout Fallback")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.gray)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 20)
+                    .background(Color(white: 0.15))
+                    .clipShape(Capsule())
             }
             .padding(.top, 4)
+            .disabled(isFinished)
 
             if isFinished {
                 let winner = engine.state.players.min(by: { $0.totalScore < $1.totalScore })!

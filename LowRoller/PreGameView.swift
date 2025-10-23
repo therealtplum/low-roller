@@ -103,6 +103,7 @@ struct PreGameView: View {
                         Label("Start Game", systemImage: "play.fill")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
+                            .foregroundColor(.white)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.green)

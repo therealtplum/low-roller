@@ -5,10 +5,15 @@
 //  Created by Thomas Plummer on 10/22/25.
 //
 
-
 // Model/GameEngine.swift
 import Foundation
-import Combine    // ← add
+import Combine
+
+// MARK: - Notifications used by the UI
+extension Notification.Name {
+    /// Posted when a match ends. `object` is a Bool: true if a human (non-bot) won.
+    static let humanWonMatch = Notification.Name("humanWonMatch")
+}
 
 final class GameEngine: ObservableObject {
     @Published private(set) var state: GameState
@@ -23,8 +28,21 @@ final class GameEngine: ObservableObject {
 
     // MARK: - Helpers
     private func score(_ face: Int) -> Int { face == 3 ? 0 : face }
-    private var curIdx: Int { state.turnIdx }
     private var isFinished: Bool { state.phase == .finished }
+
+    /// Total points for a player (lower is better in Low Roller).
+    private func totalPoints(for p: Player) -> Int {
+        p.picks.reduce(0, +)
+    }
+
+    /// Winner is the player with the *lowest* total points.
+    /// Tie-breaker: earliest player in order (adjust if you have different rules).
+    private func computeWinnerIndex() -> Int? {
+        guard !state.players.isEmpty else { return nil }
+        return state.players.enumerated()
+            .min(by: { totalPoints(for: $0.element) < totalPoints(for: $1.element) })?
+            .offset
+    }
 
     // MARK: - Actions
     func roll() {
@@ -52,9 +70,22 @@ final class GameEngine: ObservableObject {
     func endTurnIfDone() -> Bool {
         guard state.remainingDice == 0 else { return false }
         state.turnsTaken += 1
+
         if state.turnsTaken >= state.players.count {
+            // Match ends after each player has taken a turn.
             state.phase = .finished
+
+            // Compute winner *now* and broadcast whether a human won.
+            if let wIdx = computeWinnerIndex() {
+                let humanWon = !state.players[wIdx].isBot
+                NotificationCenter.default.post(name: .humanWonMatch, object: humanWon)
+            } else {
+                // Edge case: no winner (shouldn't happen), broadcast false.
+                NotificationCenter.default.post(name: .humanWonMatch, object: false)
+            }
+
         } else {
+            // Next player's turn
             state.turnIdx = (state.turnIdx + 1) % state.players.count
             state.remainingDice = 7
             state.lastFaces = []

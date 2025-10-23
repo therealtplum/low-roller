@@ -14,6 +14,7 @@ struct DiceView: View {
     let face: Int
     var selected: Bool = false
     var size: CGFloat = 54
+    let shakeToken: Int  // 👈 add this
 
     var body: some View {
         let pip = max(8, size * 0.14)
@@ -35,7 +36,8 @@ struct DiceView: View {
                 .padding(size * 0.18)
         }
         .frame(width: size, height: size)
-        .animation(.easeOut(duration: 0.2), value: face)
+        .modifier(ShakeEffect(animatableData: CGFloat(shakeToken)))
+        .animation(.easeOut(duration: 0.45), value: shakeToken)
     }
 
     @ViewBuilder

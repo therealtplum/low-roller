@@ -1,14 +1,15 @@
-// UI/GameView.swift
 import SwiftUI
 import Foundation
 import UIKit
 
+// MARK: - Main GameView
 struct GameView: View {
     @ObservedObject var engine: GameEngine
     @StateObject private var leaders = LeaderboardStore()
 
     @State private var botCtl: BotController?
     @State private var picked: Set<Int> = []
+    @State private var rollShake: Int = 0   // 👈 new wiggle trigger token
 
     // 5:00 per turn
     @State private var timeLeft: Int = 300
@@ -55,13 +56,16 @@ struct GameView: View {
 
                         LazyVGrid(columns: columns, alignment: .center, spacing: spacing) {
                             ForEach(Array(engine.state.lastFaces.enumerated()), id: \.offset) { (i, f) in
-                                DiceView(face: f, selected: picked.contains(i), size: dieSize)
-                                    .onTapGesture {
-                                        guard isYourTurn, !isFinished else { return }
-                                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                                            if picked.contains(i) { picked.remove(i) } else { picked.insert(i) }
-                                        }
+                                DiceView(face: f,
+                                         selected: picked.contains(i),
+                                         size: dieSize,
+                                         shakeToken: rollShake) // 👈 animate with this token
+                                .onTapGesture {
+                                    guard isYourTurn, !isFinished else { return }
+                                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                                        if picked.contains(i) { picked.remove(i) } else { picked.insert(i) }
                                     }
+                                }
                             }
                         }
                         .padding(.horizontal, 8)
@@ -77,6 +81,8 @@ struct GameView: View {
             HStack(spacing: 20) {
                 Button {
                     guard isYourTurn, !isFinished, engine.state.lastFaces.isEmpty else { return }
+                    // Trigger dice shake
+                    withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
                     withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { engine.roll() }
                 } label: {
                     Label("Roll", systemImage: "dice.fill")
@@ -108,7 +114,10 @@ struct GameView: View {
 
             // --- Timeout fallback (secondary button) ---
             Button {
-                if engine.state.lastFaces.isEmpty && engine.state.remainingDice > 0 { engine.roll() }
+                if engine.state.lastFaces.isEmpty && engine.state.remainingDice > 0 {
+                    withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
+                    engine.roll()
+                }
                 engine.fallbackPick()
             } label: {
                 Text("Timeout Fallback")
@@ -122,6 +131,7 @@ struct GameView: View {
             .padding(.top, 4)
             .disabled(isFinished)
 
+            // --- End of Game ---
             if isFinished {
                 let winner = engine.state.players.min(by: { $0.totalScore < $1.totalScore })!
                 VStack(spacing: 6) {
@@ -153,8 +163,12 @@ struct GameView: View {
             scheduleTurnTimer()
             botCtl?.scheduleBotIfNeeded()
         }
-        .onChangeCompat(engine.state.lastFaces) { _, _ in
+        // When dice appear (after empty) trigger wiggle — works for bots too
+        .onChangeCompat(engine.state.lastFaces) { oldFaces, newFaces in
             botCtl?.scheduleBotIfNeeded()
+            if oldFaces.isEmpty && !newFaces.isEmpty {
+                withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
+            }
         }
     }
 
@@ -167,7 +181,10 @@ struct GameView: View {
             timeLeft -= 1
             if timeLeft <= 0 {
                 t.invalidate()
-                if engine.state.lastFaces.isEmpty && engine.state.remainingDice > 0 { engine.roll() }
+                if engine.state.lastFaces.isEmpty && engine.state.remainingDice > 0 {
+                    withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
+                    engine.roll()
+                }
                 engine.fallbackPick()
             }
         }
@@ -188,5 +205,17 @@ extension View {
         } else {
             self.onChange(of: value) { newValue in perform(newValue, newValue) }
         }
+    }
+}
+
+// MARK: - ShakeEffect (used by DiceView)
+struct ShakeEffect: GeometryEffect {
+    var amount: CGFloat = 10
+    var shakesPerUnit: CGFloat = 6
+    var animatableData: CGFloat
+
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        let translation = amount * sin(animatableData * .pi * shakesPerUnit)
+        return ProjectionTransform(CGAffineTransform(translationX: translation, y: 0))
     }
 }

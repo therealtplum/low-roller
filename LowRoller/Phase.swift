@@ -1,11 +1,3 @@
-//
-//  Phase.swift
-//  LowRoller
-//
-//  Created by Thomas Plummer on 10/22/25.
-//
-
-
 // Model/GameTypes.swift
 import Foundation
 

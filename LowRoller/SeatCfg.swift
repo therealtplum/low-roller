@@ -1,10 +1,11 @@
-// Model/SeatCfg.swift
+// Models/SeatCfg.swift
 import Foundation
 
 struct SeatCfg: Identifiable, Equatable {
     let id = UUID()
     var isBot: Bool
-    var botLevel: BotLevel = .amateur   // relies on your BotLevel enum
+    var botLevel: BotLevel = .amateur   // uses BotLevel from Phase.swift
     var name: String
-    var wagerCents: Int                 // cents ($5 = 500)
+    /// Wager in cents (e.g. $5 = 500)
+    var wagerCents: Int
 }

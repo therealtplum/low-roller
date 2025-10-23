@@ -1,40 +1,57 @@
-//
-//  BotController.swift
-//  LowRoller
-//
-//  Created by Thomas Plummer on 10/22/25.
-//
-
-
-// Model/Bot.swift
+// BotController.swift
 import Foundation
+import Combine
 
 final class BotController {
-    private var timer: Timer?
-    private var stepWork: (() -> Void)?
     private weak var engine: GameEngine?
+    private var workItem: DispatchWorkItem?
 
-    init(bind engine: GameEngine) { self.engine = engine }
+    init(bind engine: GameEngine) {
+        self.engine = engine
+    }
 
+    /// Call this on appear and whenever turn/lastFaces change.
     func scheduleBotIfNeeded() {
+        workItem?.cancel()
         guard let eng = engine else { return }
-        let cur = eng.state.players[eng.state.turnIdx]
-        guard cur.isBot, eng.state.phase == .normal else { return }
+        guard eng.state.phase != .finished else { return }
 
-        stepWork = { [weak self] in
-            guard let eng = self?.engine else { return }
-            if eng.state.lastFaces.isEmpty && eng.state.remainingDice > 0 {
-                eng.roll()
-            } else {
-                eng.fallbackPick()
-            }
-            if eng.state.players[eng.state.turnIdx].isBot && eng.state.phase == .normal {
-                self?.scheduleBotIfNeeded()
-            }
+        let cur = eng.state.players[eng.state.turnIdx]
+        guard cur.isBot else { return }
+
+        let item = DispatchWorkItem { [weak self] in
+            self?.stepLoop()
         }
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { _ in
-            self.stepWork?()
+        workItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: item)
+    }
+
+    private func stepLoop() {
+        guard let eng = engine else { return }
+        guard eng.state.phase != .finished else { return }
+
+        let cur = eng.state.players[eng.state.turnIdx]
+        guard cur.isBot else { return }
+
+        // 1) If bot hasn't started this turn, roll.
+        if eng.state.lastFaces.isEmpty && eng.state.remainingDice > 0 {
+            _ = eng.roll()
+        } else {
+            // 2) Otherwise, let the engine decide bot picks (amateur/pro logic inside)
+            _ = eng.fallbackPick()
+            // 3) End the turn when all dice are placed; may advance to next player.
+            _ = eng.endTurnIfDone()
+        }
+
+        // If next player is also a bot, continue; otherwise stop.
+        let moreBots =
+            eng.state.phase != .finished &&
+            eng.state.players[eng.state.turnIdx].isBot
+
+        if moreBots {
+            let item = DispatchWorkItem { [weak self] in self?.stepLoop() }
+            workItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: item)
         }
     }
 }

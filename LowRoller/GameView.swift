@@ -16,6 +16,9 @@ struct GameView: View {
     @State private var timeLeft: Int = 300
     @State private var turnTimer: Timer?
 
+    // Ensure leaderboard is written once per game
+    @State private var wroteOutcome = false
+
     private var isYourTurn: Bool { !engine.state.players[engine.state.turnIdx].isBot }
     private var isFinished: Bool { engine.state.phase == .finished }
 
@@ -135,16 +138,16 @@ struct GameView: View {
                 .padding(.top, 4)
                 .disabled(isFinished)
 
-                // --- End of Game ---
+                // --- End of Game UI (read-only) ---
                 if isFinished {
-                    // Winner = lowest total score (display assumes you have `display` and `totalScore`)
+                    // Display-only winner (lowest total score)
                     let winner = engine.state.players.min(by: { $0.totalScore < $1.totalScore })!
                     VStack(spacing: 6) {
                         Text("Game Over").font(.headline)
                         Text("Winner: \(winner.display) • Total: \(winner.totalScore) • Pot: $\(engine.state.potCents/100)")
                             .multilineTextAlignment(.center)
                         Button("Back to Lobby") {
-                            leaders.recordWinner(name: winner.display, potCents: engine.state.potCents)
+                            // No leaderboard writes here (handled once in onChange below)
                             NotificationCenter.default.post(name: .lowRollerBackToLobby, object: nil)
                         }
                         .padding(.top, 6)
@@ -161,6 +164,7 @@ struct GameView: View {
                 .ignoresSafeArea()
         }
         .onAppear {
+            wroteOutcome = false
             let b = BotController(bind: engine)
             botCtl = b
             scheduleTurnTimer()
@@ -186,6 +190,41 @@ struct GameView: View {
                 withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
             }
         }
+        // Write leaderboard exactly once when the game reaches .finished
+        .onChangeCompat(engine.state.phase) { _, newPhase in
+            if newPhase == .finished {
+                writeOutcomeIfNeeded()
+            } else {
+                // Any non-finished phase resets the guard for the next game
+                wroteOutcome = false
+            }
+        }
+    }
+
+    private func writeOutcomeIfNeeded() {
+        guard !wroteOutcome else { return }
+
+        let players = engine.state.players
+        guard !players.isEmpty else { return }
+
+        // Determine winner index by lowest total score
+        let winnerIdx = players.indices.min(by: { players[$0].totalScore < players[$1].totalScore }) ?? 0
+
+        // Use canonical display names for storage
+        let winnerDisplay = players[winnerIdx].display
+        let losers = players.enumerated()
+            .filter { $0.offset != winnerIdx }
+            .map { $0.element.display }
+
+        leaders.recordMatch(
+            winnerName: winnerDisplay,
+            loserNames: losers,
+            potCents: engine.state.potCents
+        )
+
+        wroteOutcome = true
+        // Optional: debug log
+        // print("[Leaderboard] WIN:", winnerDisplay, "LOSERS:", losers)
     }
 
     private func fireConfetti() {

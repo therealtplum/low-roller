@@ -18,7 +18,7 @@ struct PreGameView: View {
 
     // lobby state
     @FocusState private var focusName: Bool
-    @State private var youStart = true
+    @State private var youStart = false
     @State private var count = 2
     @State private var yourWagerCents = 500
     @State private var seats: [SeatCfg] = (2...8).map { i in

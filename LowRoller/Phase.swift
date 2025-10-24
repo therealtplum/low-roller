@@ -2,7 +2,6 @@
 import Foundation
 
 enum Phase: String, Codable { case normal, suddenDeath, finished }
-enum BotLevel: String, Codable { case amateur, pro }
 
 // ✅ Codable replacement for the tuple
 struct SuddenFaces: Codable {

@@ -1,16 +1,12 @@
 // UI/PreGameView.swift
 import SwiftUI
 import UIKit
+import Foundation
 
 struct PreGameView: View {
     // passed from App
     @State var youName: String
     let start: (_ engine: GameEngine) -> Void
-
-    init(youName: String, start: @escaping (_ engine: GameEngine) -> Void) {
-        self.start = start
-        _youName = State(initialValue: youName)
-    }
 
     // Store + UI state
     @StateObject private var leaders = LeaderboardStore()
@@ -21,8 +17,33 @@ struct PreGameView: View {
     @State private var youStart = false
     @State private var count = 2
     @State private var yourWagerCents = 500
-    @State private var seats: [SeatCfg] = (2...8).map { i in
-        SeatCfg(isBot: i == 2, name: "Player \(i)", wagerCents: 500)
+    @State private var seats: [SeatCfg]
+
+    // MARK: - Init
+    init(youName: String, start: @escaping (_ engine: GameEngine) -> Void) {
+        self.start = start
+        _youName = State(initialValue: youName)
+
+        // Build seats with Player 2..8 labels; make seat 2 a bot by default
+        var initialSeats: [SeatCfg] = (2...8).map { i in
+            SeatCfg(isBot: i == 2, name: "Player \(i)", wagerCents: 500)
+        }
+
+        // Assign pun names immediately for any seats that start as bots (unique across lobby)
+        var used = Set<UUID>()
+        for idx in initialSeats.indices where initialSeats[idx].isBot {
+            let pick = BotRoster.random(level: initialSeats[idx].botLevel, avoiding: used)
+            used.insert(pick.id)
+            initialSeats[idx].botId = pick.id
+            initialSeats[idx].name  = pick.name
+        }
+
+        _seats = State(initialValue: initialSeats)
+    }
+
+    // Track all bot IDs currently used so randoms stay unique
+    private var usedBotIds: Set<UUID> {
+        Set(seats.compactMap { $0.botId })
     }
 
     var potPreview: Int {
@@ -49,8 +70,34 @@ struct PreGameView: View {
                 // --- Players ---
                 Section("Players (\(count))") {
                     Stepper(value: $count, in: 2...8) { Text("Count: \(count)") }
-                    ForEach(Array(seats.prefix(count - 1).enumerated()), id: \.element.id) { (i, _) in
-                        SeatRow(seat: $seats[i])
+
+                    ForEach(Array(seats.prefix(count - 1).indices), id: \.self) { i in
+                        SeatRow(
+                            seat: $seats[i],
+                            usedBotIds: usedBotIds,
+
+                            // Return the picked identity so the row can update its UI immediately
+                            onSurpriseMe: { assignRandomBotReturning(forIndex: i, preferUnique: true) },
+
+                            onPick: { bot in
+                                seats[i].botId = bot.id
+                                seats[i].name  = bot.name
+                            },
+
+                            // Pass the level down, pick at parent (for uniqueness), return the identity
+                            onLevelChange: { newLevel in
+                                assignRandomBotReturning(forIndex: i, to: newLevel, preferUnique: true)
+                            },
+
+                            onToggleBot: { isOn in
+                                if isOn {
+                                    _ = assignRandomBotReturning(forIndex: i, preferUnique: true)
+                                } else {
+                                    seats[i].botId = nil
+                                    if seats[i].name.isEmpty { seats[i].name = "Player \(i + 2)" }
+                                }
+                            }
+                        )
                     }
                 }
 
@@ -71,15 +118,13 @@ struct PreGameView: View {
                             wagerCents: yourWagerCents
                         ))
 
-                        var botCount = 0
                         for s in seats.prefix(count - 1) {
                             if s.isBot {
-                                botCount += 1
-                                let levelTitle = (s.botLevel == .pro) ? "Pro" : "Amateur"
-                                let label = botCount == 1 ? "\(levelTitle)" : "\(levelTitle) #\(botCount)"
                                 players.append(Player(
                                     id: UUID(),
-                                    display: label,
+                                    display: s.name.isEmpty
+                                        ? (s.botLevel == .pro ? "Pro Bot" : "Amateur Bot")
+                                        : s.name, // pun name if chosen/assigned
                                     isBot: true,
                                     botLevel: s.botLevel,
                                     wagerCents: s.wagerCents
@@ -95,10 +140,8 @@ struct PreGameView: View {
                             }
                         }
 
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                            let engine = GameEngine(players: players, youStart: youStart)
-                            start(engine)
-                        }
+                        let engine = GameEngine(players: players, youStart: youStart)
+                        start(engine)
                     } label: {
                         Label("Start Game", systemImage: "play.fill")
                             .font(.headline)
@@ -138,28 +181,109 @@ struct PreGameView: View {
             .scrollDismissesKeyboard(.interactively)
         }
     }
+
+    // MARK: - Helpers (now return the chosen identity)
+    @discardableResult
+    private func assignRandomBotReturning(forIndex i: Int, to level: AIBotLevel, preferUnique: Bool = true) -> BotIdentity {
+        var avoid = usedBotIds
+        if let currentId = seats[i].botId { avoid.remove(currentId) } // allow this seat to change
+        let pick = BotRoster.random(level: level, avoiding: preferUnique ? avoid : [])
+        seats[i].botLevel = level
+        seats[i].botId    = pick.id
+        seats[i].name     = pick.name
+        return pick
+    }
+
+    @discardableResult
+    private func assignRandomBotReturning(forIndex i: Int, preferUnique: Bool = true) -> BotIdentity {
+        assignRandomBotReturning(forIndex: i, to: seats[i].botLevel, preferUnique: preferUnique)
+    }
 }
 
-// MARK: - SeatRow remains unchanged
+// MARK: - SeatRow
 private struct SeatRow: View {
     @Binding var seat: SeatCfg
 
+    // Provided from parent; useful if you later want to gray out taken names
+    let usedBotIds: Set<UUID>
+
+    // Callbacks from parent (return identity so the row can update immediately)
+    let onSurpriseMe: () -> BotIdentity
+    let onPick: (BotIdentity) -> Void
+    let onLevelChange: (AIBotLevel) -> BotIdentity
+    let onToggleBot: (Bool) -> Void
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Toggle("Seat is a bot", isOn: $seat.isBot)
+            Toggle("Seat is a bot", isOn: Binding(
+                get: { seat.isBot },
+                set: { newVal in
+                    onToggleBot(newVal)
+                    seat.isBot = newVal
+                    if newVal && (seat.name.isEmpty || seat.name.hasPrefix("Player")) {
+                        let pick = onSurpriseMe()
+                        seat.botId = pick.id
+                        seat.name  = pick.name
+                    }
+                }
+            ))
 
             if seat.isBot {
-                Picker("Level", selection: $seat.botLevel) {
-                    Text("Amateur").tag(BotLevel.amateur)
-                    Text("Pro").tag(BotLevel.pro)
+                // Level switch — immediately re-roll from the chosen level and update the visible name
+                Picker("Level", selection: Binding(
+                    get: { seat.botLevel },
+                    set: { newLevel in
+                        seat.botLevel = newLevel
+                        let pick = onLevelChange(newLevel) // parent assigns & ensures uniqueness
+                        seat.botId = pick.id
+                        seat.name  = pick.name            // update row UI immediately
+                    }
+                )) {
+                    Text("Amateur").tag(AIBotLevel.amateur)
+                    Text("Pro").tag(AIBotLevel.pro)
                 }
                 .pickerStyle(.segmented)
+
+                // Tappable label with a context menu (avoids UIKit reparenting warnings in Form/List)
+                Button {
+                    // tap can be a no-op; long-press opens the menu
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "person.crop.circle")
+                        Text(seat.name.isEmpty ? "Choose Opponent…" : seat.name)
+                            .fontWeight(.semibold)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .contextMenu {
+                    let options = BotRoster.all(for: seat.botLevel)
+                    ForEach(options) { bot in
+                        Button(bot.name) {
+                            onPick(bot)
+                            seat.botId = bot.id
+                            seat.name  = bot.name
+                        }
+                    }
+                    Divider()
+                    Button("Surprise me again") {
+                        let pick = onSurpriseMe()
+                        seat.botId = pick.id
+                        seat.name  = pick.name
+                    }
+                }
+
             } else {
                 TextField("Name", text: $seat.name)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
             }
 
             Stepper(value: $seat.wagerCents, in: 500...10000, step: 500) {
-                HStack { Text("Buy-in"); Spacer(); Text("$\(seat.wagerCents / 100)") }
+                HStack {
+                    Text("Buy-in")
+                    Spacer()
+                    Text("$\(seat.wagerCents / 100)")
+                }
             }
         }
         .padding(.vertical, 4)

@@ -1,10 +1,10 @@
-// UI/LeaderRow.swift
 import SwiftUI
 
 struct LeaderRow: View {
     let rank: Int
     let entry: LeaderEntry
     let metric: LeaderMetric
+    var onDelete: (() -> Void)? = nil   // ← optional trailing delete handler
 
     // MARK: - Formatters
     private func currencyString(cents: Int) -> String {
@@ -16,7 +16,6 @@ struct LeaderRow: View {
         return nf.string(from: NSNumber(value: dollars)) ?? "$\(Int(dollars))"
     }
 
-    // Right-aligned, large value
     private var rightText: String {
         switch metric {
         case .dollars: return currencyString(cents: entry.dollarsWonCents)
@@ -25,7 +24,6 @@ struct LeaderRow: View {
         }
     }
 
-    // Small icon only (no caption text)
     private var metricIconName: String {
         switch metric {
         case .dollars: return "dollarsign.circle.fill"
@@ -52,7 +50,7 @@ struct LeaderRow: View {
 
             Spacer()
 
-            // Only the big metric value on the right
+            // Big metric value
             Text(rightText)
                 .font(.headline)
                 .monospacedDigit()
@@ -63,6 +61,23 @@ struct LeaderRow: View {
                     case .streak:  return Text("Longest streak \(rightText)")
                     }
                 }())
+
+            // Trailing overflow menu — only if handler provided
+            if let onDelete = onDelete {
+                Menu {
+                    Button(role: .destructive) {
+                        onDelete()
+                    } label: {
+                        Label("Remove", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .imageScale(.large)
+                        .padding(.leading, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless) // behaves nicely inside Form/List rows
+            }
         }
         .padding(.vertical, 6)
     }

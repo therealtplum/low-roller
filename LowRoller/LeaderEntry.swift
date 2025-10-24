@@ -58,41 +58,6 @@ final class LeaderboardStore: ObservableObject {
 
     // MARK: - Public API
 
-    /// Call when `name` won the game.
-    private func recordWinner(name: String, potCents: Int) {
-        let key = normalizeName(name)
-        if let i = indexOfName(key) {
-            // In-place update: no merge ambiguity
-            entries[i].gamesWon += 1
-            entries[i].dollarsWonCents += max(0, potCents)
-            entries[i].currentStreak += 1
-            if entries[i].currentStreak > entries[i].longestStreak {
-                entries[i].longestStreak = entries[i].currentStreak
-            }
-            entries[i].lastWinAt = Date()
-        } else {
-            // First time winner
-            entries.append(LeaderEntry(
-                name: key,
-                gamesWon: 1,
-                dollarsWonCents: max(0, potCents),
-                longestStreak: 1,
-                currentStreak: 1,
-                lastWinAt: Date()
-            ))
-        }
-        sortAndSave()
-    }
-
-    /// Call when `name` did NOT win (loss/draw), to break their current streak.
-    private func recordLoss(name: String) {
-        let key = normalizeName(name)
-        if let i = indexOfName(key), entries[i].currentStreak != 0 {
-            entries[i].currentStreak = 0
-            sortAndSave()
-        }
-    }
-
     /// Convenience: record an explicit result in one call.
     func recordResult(name: String, didWin: Bool, potCents: Int = 0) {
         if didWin { recordWinner(name: name, potCents: potCents) }
@@ -109,6 +74,24 @@ final class LeaderboardStore: ObservableObject {
     func resetAll() {
         entries.removeAll()
         save()
+    }
+
+    /// Remove a single entry everywhere (by stable id).
+    func removeEntry(id: UUID) {
+        if let i = entries.firstIndex(where: { $0.id == id }) {
+            entries.remove(at: i)
+            save()
+        }
+    }
+
+    /// Optional convenience: remove by display name (case-insensitive).
+    func removeByName(_ name: String) {
+        let key = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        if let i = indexOfName(key) {
+            entries.remove(at: i)
+            save()
+        }
     }
 
     /// Top 10 by metric, with deterministic tie-breakers.
@@ -161,6 +144,37 @@ final class LeaderboardStore: ObservableObject {
     }
 
     // MARK: - Internals
+
+    private func recordWinner(name: String, potCents: Int) {
+        let key = normalizeName(name)
+        if let i = indexOfName(key) {
+            entries[i].gamesWon += 1
+            entries[i].dollarsWonCents += max(0, potCents)
+            entries[i].currentStreak += 1
+            if entries[i].currentStreak > entries[i].longestStreak {
+                entries[i].longestStreak = entries[i].currentStreak
+            }
+            entries[i].lastWinAt = Date()
+        } else {
+            entries.append(LeaderEntry(
+                name: key,
+                gamesWon: 1,
+                dollarsWonCents: max(0, potCents),
+                longestStreak: 1,
+                currentStreak: 1,
+                lastWinAt: Date()
+            ))
+        }
+        sortAndSave()
+    }
+
+    private func recordLoss(name: String) {
+        let key = normalizeName(name)
+        if let i = indexOfName(key), entries[i].currentStreak != 0 {
+            entries[i].currentStreak = 0
+            sortAndSave()
+        }
+    }
 
     private func normalizeName(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)

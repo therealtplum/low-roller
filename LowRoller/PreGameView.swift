@@ -1,4 +1,3 @@
-// UI/PreGameView.swift
 import SwiftUI
 import UIKit
 import Foundation
@@ -18,6 +17,9 @@ struct PreGameView: View {
     @State private var count = 2
     @State private var yourWagerCents = 500
     @State private var seats: [SeatCfg]
+
+    // For leaderboard confirm delete
+    @State private var pendingDelete: LeaderEntry?
 
     // MARK: - Init
     init(youName: String, start: @escaping (_ engine: GameEngine) -> Void) {
@@ -52,7 +54,7 @@ struct PreGameView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            List {
                 // --- You ---
                 Section("You") {
                     TextField("Your name", text: $youName)
@@ -169,16 +171,41 @@ struct PreGameView: View {
                     } else {
                         ForEach(Array(top.enumerated()), id: \.element.id) { (i, e) in
                             LeaderRow(rank: i + 1, entry: e, metric: metric)
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button(role: .destructive) {
+                                        pendingDelete = e
+                                    } label: {
+                                        Label("Remove", systemImage: "trash")
+                                    }
+                                }
                         }
                     }
                 } header: {
                     Text("All-Time Leaderboard")
                 } footer: {
-                    Text("Shows the top 10 by the selected metric.")
+                    Text("Swipe left on a row to remove a player from all leaderboard views.")
                 }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("Low Roller")
             .scrollDismissesKeyboard(.interactively)
+            .alert(
+                "Remove \(pendingDelete?.name ?? "player")?",
+                isPresented: Binding(
+                    get: { pendingDelete != nil },
+                    set: { if !$0 { pendingDelete = nil } }
+                )
+            ) {
+                Button("Cancel", role: .cancel) { pendingDelete = nil }
+                Button("Remove", role: .destructive) {
+                    if let id = pendingDelete?.id {
+                        leaders.removeEntry(id: id)
+                    }
+                    pendingDelete = nil
+                }
+            } message: {
+                Text("This will remove them from all leaderboard views.")
+            }
         }
     }
 
@@ -200,7 +227,7 @@ struct PreGameView: View {
     }
 }
 
-// MARK: - SeatRow
+// MARK: - SeatRow (sheet-based opponent picker; no context-menu warnings)
 private struct SeatRow: View {
     @Binding var seat: SeatCfg
 
@@ -212,6 +239,8 @@ private struct SeatRow: View {
     let onPick: (BotIdentity) -> Void
     let onLevelChange: (AIBotLevel) -> BotIdentity
     let onToggleBot: (Bool) -> Void
+
+    @State private var showOpponentPicker = false   // ← sheet trigger
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -229,14 +258,13 @@ private struct SeatRow: View {
             ))
 
             if seat.isBot {
-                // Level switch — immediately re-roll from the chosen level and update the visible name
                 Picker("Level", selection: Binding(
                     get: { seat.botLevel },
                     set: { newLevel in
                         seat.botLevel = newLevel
-                        let pick = onLevelChange(newLevel) // parent assigns & ensures uniqueness
+                        let pick = onLevelChange(newLevel)
                         seat.botId = pick.id
-                        seat.name  = pick.name            // update row UI immediately
+                        seat.name  = pick.name
                     }
                 )) {
                     Text("Amateur").tag(AIBotLevel.amateur)
@@ -244,32 +272,39 @@ private struct SeatRow: View {
                 }
                 .pickerStyle(.segmented)
 
-                // Tappable label with a context menu (avoids UIKit reparenting warnings in Form/List)
+                // Button opens a sheet with the opponents list (no UIContextMenu involved)
                 Button {
-                    // tap can be a no-op; long-press opens the menu
+                    showOpponentPicker = true
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "person.crop.circle")
                         Text(seat.name.isEmpty ? "Choose Opponent…" : seat.name)
                             .fontWeight(.semibold)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down") // affordance for a chooser
+                            .imageScale(.small)
+                            .foregroundStyle(.secondary)
                     }
                     .contentShape(Rectangle())
                 }
-                .contextMenu {
-                    let options = BotRoster.all(for: seat.botLevel)
-                    ForEach(options) { bot in
-                        Button(bot.name) {
+                .buttonStyle(.plain)
+                .sheet(isPresented: $showOpponentPicker) {
+                    OpponentPickerView(
+                        level: seat.botLevel,
+                        onPick: { bot in
                             onPick(bot)
                             seat.botId = bot.id
                             seat.name  = bot.name
+                            showOpponentPicker = false
+                        },
+                        onSurprise: {
+                            let pick = onSurpriseMe()
+                            seat.botId = pick.id
+                            seat.name  = pick.name
+                            showOpponentPicker = false
                         }
-                    }
-                    Divider()
-                    Button("Surprise me again") {
-                        let pick = onSurpriseMe()
-                        seat.botId = pick.id
-                        seat.name  = pick.name
-                    }
+                    )
+                    .presentationDetents([.medium, .large])
                 }
 
             } else {
@@ -287,6 +322,50 @@ private struct SeatRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+// MARK: - OpponentPickerView (sheet content)
+private struct OpponentPickerView: View {
+    let level: AIBotLevel
+    let onPick: (BotIdentity) -> Void
+    let onSurprise: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Button {
+                        onSurprise()
+                    } label: {
+                        Label("Surprise me", systemImage: "sparkles")
+                    }
+                }
+
+                Section("Opponents") {
+                    ForEach(BotRoster.all(for: level)) { bot in
+                        Button {
+                            onPick(bot)
+                        } label: {
+                            HStack {
+                                Image(systemName: "person.fill")
+                                    .foregroundStyle(.secondary)
+                                Text(bot.name)
+                                Spacer()
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Choose Opponent")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
     }
 }
 

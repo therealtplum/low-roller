@@ -17,7 +17,7 @@ struct DiceView: View {
     let shakeToken: Int  // 👈 add this
 
     var body: some View {
-        let pip = max(8, size * 0.14)
+        let _ = max(8, size * 0.14)
         ZStack {
             RoundedRectangle(cornerRadius: max(8, size * 0.18))
                 .fill(

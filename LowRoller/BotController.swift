@@ -35,10 +35,10 @@ final class BotController {
 
         // 1) If bot hasn't started this turn, roll.
         if eng.state.lastFaces.isEmpty && eng.state.remainingDice > 0 {
-            _ = eng.roll()
+            eng.roll()
         } else {
             // 2) Otherwise, let the engine decide bot picks (amateur/pro logic inside)
-            _ = eng.fallbackPick()
+            eng.fallbackPick()
             // 3) End the turn when all dice are placed; may advance to next player.
             _ = eng.endTurnIfDone()
         }

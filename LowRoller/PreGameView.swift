@@ -41,7 +41,7 @@ struct PreGameView: View {
 
         var taken = Set<UUID>() // ensure unique bot identities across seats
 
-        var initialSeats: [SeatCfg] = (2...8).map { i in
+        let initialSeats: [SeatCfg] = (2...8).map { i in
             var cfg = SeatCfg(
                 isBot: true,                                 // default seats as bots
                 botLevel: i == 2 ? .pro : .amateur,          // seat 2 starts Pro by default

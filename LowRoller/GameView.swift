@@ -7,6 +7,9 @@ struct GameView: View {
     @ObservedObject var engine: GameEngine
     @StateObject private var leaders = LeaderboardStore()
 
+    // NEW: observe House
+    @ObservedObject private var economy = EconomyStore.shared
+
     @State private var botCtl: BotController?
     @State private var picked: Set<Int> = []
     @State private var rollShake: Int = 0
@@ -18,6 +21,9 @@ struct GameView: View {
 
     // Ensure leaderboard is written once per game
     @State private var wroteOutcome = false
+
+    // Track the *pre-payout* pot so we can record correct winnings
+    @State private var startingPotCents: Int = 0
 
     // Sudden Death animation overlay state
     @State private var sdShowOverlay = false
@@ -35,6 +41,20 @@ struct GameView: View {
             // ---- main content ----
             VStack(spacing: 16) {
                 HUDView(engine: engine, timeLeft: timeLeft)
+
+                // NEW: economy strip (Pot + House)
+                HStack(spacing: 16) {
+                    Label {
+                        Text("Pot \(currency(startingPotCents))")
+                    } icon: { Image(systemName: "cube.box.fill") }
+
+                    Label {
+                        Text("House \(currency(economy.houseCents))")
+                    } icon: { Image(systemName: "banknote.fill") }
+                }
+                .font(.subheadline)
+                .opacity(0.9)
+                .padding(.top, -8)
 
                 // --- Dice area ---
                 ZStack {
@@ -191,7 +211,7 @@ struct GameView: View {
 
                     VStack(spacing: 6) {
                         Text("Game Over").font(.headline)
-                        Text("Winner: \(winner.display) • Total: \(winner.totalScore) • Pot: $\(engine.state.potCents/100)")
+                        Text("Winner: \(winner.display) • Total: \(winner.totalScore) • Pot: \(currency(startingPotCents))")
                             .multilineTextAlignment(.center)
                         Button("Back to Lobby") {
                             // No leaderboard writes here (handled once in onChange below)
@@ -255,6 +275,9 @@ struct GameView: View {
         }
         .onAppear {
             wroteOutcome = false
+            // Capture the *pre-payout* pot (engine will zero it after payout)
+            startingPotCents = engine.state.potCents
+
             let b = BotController(bind: engine)
             botCtl = b
             scheduleTurnTimer()
@@ -280,6 +303,10 @@ struct GameView: View {
             if oldFaces.isEmpty && !newFaces.isEmpty {
                 withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
             }
+        }
+        // Keep a stable record of the original pot (first non-zero we see)
+        .onChangeCompat(engine.state.potCents) { oldVal, newVal in
+            if startingPotCents == 0, newVal > 0 { startingPotCents = newVal }
         }
         // Write leaderboard exactly once when the game reaches .finished
         .onChangeCompat(engine.state.phase) { _, newPhase in
@@ -342,17 +369,22 @@ struct GameView: View {
         let winnerIdx = engine.state.winnerIdx
             ?? (players.indices.min { players[$0].totalScore < players[$1].totalScore } ?? 0)
 
-        // Use canonical display names for storage
         let winnerDisplay = players[winnerIdx].display
         let losers = players.enumerated()
             .filter { $0.offset != winnerIdx }
             .map { $0.element.display }
 
+        // Record the match with the *original* pot (pre-payout)
         leaders.recordMatch(
             winnerName: winnerDisplay,
             loserNames: losers,
-            potCents: engine.state.potCents
+            potCents: startingPotCents
         )
+
+        // Sync all bankrolls back to leaderboard
+        for p in players {
+            leaders.updateBankroll(name: p.display, bankrollCents: p.bankrollCents)
+        }
 
         wroteOutcome = true
     }
@@ -383,6 +415,13 @@ struct GameView: View {
             }
         }
         if let t = turnTimer { RunLoop.main.add(t, forMode: .common) }
+    }
+
+    // MARK: - Small helpers
+    private func currency(_ cents: Int) -> String {
+        let sign = cents < 0 ? "-" : ""
+        let absVal = abs(cents)
+        return "\(sign)$\(absVal/100).\(String(format: "%02d", absVal % 100))"
     }
 }
 

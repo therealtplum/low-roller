@@ -5,7 +5,6 @@
 //  Created by Thomas Plummer on 10/22/25.
 //
 
-// Model/GameEngine.swift
 import Foundation
 import Combine
 
@@ -18,12 +17,34 @@ extension Notification.Name {
 final class GameEngine: ObservableObject {
     @Published private(set) var state: GameState
     private var rng = SystemRandomNumberGenerator()
+    private let economy = EconomyStore.shared
 
-    init(players: [Player], youStart: Bool) {
-        let pot = players.map(\.wagerCents).reduce(0, +)
-        var s = GameState(players: players, potCents: pot)
-        s.turnIdx = youStart ? 0 : Int.random(in: 0..<players.count, using: &rng)
+    // MARK: - Init
+
+    /// Main initializer — hydrates bankrolls from the leaderboard.
+    init(players: [Player], youStart: Bool, leaders: LeaderboardStore) {
+        // Hydrate each player's bankroll from the leaderboard
+        var hydrated = players
+        for i in hydrated.indices {
+            let name = hydrated[i].display.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let entry = leaders.entries.first(where: { $0.name.caseInsensitiveCompare(name.isEmpty ? "You" : name) == .orderedSame }) {
+                hydrated[i].bankrollCents = entry.bankrollCents
+            }
+        }
+
+        // Start game with empty pot — we’ll build it next
+        var s = GameState(players: hydrated, potCents: 0)
+        s.turnIdx = youStart ? 0 : Int.random(in: 0..<hydrated.count, using: &rng)
         self.state = s
+
+        // Debit wagers + penalties (only once per match)
+        assemblePotFromPlayerWagers()
+    }
+
+    /// Convenience overload for existing call sites (fallback: loads leaderboard fresh)
+    convenience init(players: [Player], youStart: Bool) {
+        let tmpLeaders = LeaderboardStore()
+        self.init(players: players, youStart: youStart, leaders: tmpLeaders)
     }
 
     // MARK: - Helpers
@@ -31,18 +52,57 @@ final class GameEngine: ObservableObject {
     private var isFinished: Bool { state.phase == .finished }
 
     /// Total points for a player (lower is better in Low Roller).
-    private func totalPoints(for p: Player) -> Int {
-        p.picks.reduce(0, +)
-    }
+    private func totalPoints(for p: Player) -> Int { p.picks.reduce(0, +) }
 
     /// Winner is the player with the *lowest* total points.
-    /// Tie-breaker: earliest player in order (adjust if you have different rules).
     private func computeWinnerIndex() -> Int? {
         guard !state.players.isEmpty else { return nil }
         let totals = state.players.map { totalPoints(for: $0) }
         guard let minTotal = totals.min() else { return nil }
         let leaders = totals.enumerated().filter { $0.element == minTotal }
         return leaders.count == 1 ? leaders[0].offset : nil  // nil => tie
+    }
+
+    // MARK: - Economy / Pot assembly
+
+    /// Assemble the pot from wagers, apply penalties if needed.
+    private func assemblePotFromPlayerWagers() {
+        guard !state.potDebited else { return }  // prevent double-debit
+        var totalPot = 0
+
+        for idx in state.players.indices {
+            let base = state.players[idx].wagerCents
+            guard base >= 0 else { continue }
+
+            if state.players[idx].bankrollCents < 0 {
+                // Borrow penalty if player is already negative
+                let penalty = Int(Double(base) * 0.20)
+                state.players[idx].bankrollCents -= (base + penalty)
+                economy.recordBorrowPenalty(penalty)
+            } else {
+                state.players[idx].bankrollCents -= base
+            }
+
+            totalPot += base
+        }
+
+        state.potCents = totalPot
+        state.potDebited = true
+    }
+
+    /// Pay pot to the winner exactly once; zero out pot to prevent double-pay.
+    private func payWinnerIfNeeded() {
+        assemblePotFromPlayerWagers()  // safety: ensure wagers were debited
+
+        guard state.phase == .finished,
+              let wIdx = state.winnerIdx,
+              state.potCents > 0,
+              wIdx >= 0 && wIdx < state.players.count
+        else { return }
+
+        let pot = state.potCents
+        state.players[wIdx].bankrollCents += pot
+        state.potCents = 0 // prevent double payout
     }
 
     // MARK: - Actions
@@ -83,6 +143,9 @@ final class GameEngine: ObservableObject {
             if let wIdx = computeWinnerIndex() {
                 state.winnerIdx = wIdx
                 state.phase = .finished
+
+                // Payout + notify
+                payWinnerIfNeeded()
                 let humanWon = !state.players[wIdx].isBot
                 NotificationCenter.default.post(name: .humanWonMatch, object: humanWon)
             } else {
@@ -100,7 +163,6 @@ final class GameEngine: ObservableObject {
 
     @discardableResult
     func resolveSuddenDeathRoll() -> Int? {
-        // assume two players at indices 0 and 1; change if you support >2
         guard state.players.count >= 2 else { return nil }
         let p0Face = Int.random(in: 1...6, using: &rng)
         let p1Face = Int.random(in: 1...6, using: &rng)
@@ -118,6 +180,7 @@ final class GameEngine: ObservableObject {
         state.winnerIdx = winner
         state.phase = .finished
 
+        payWinnerIfNeeded()
         let humanWon = !state.players[winner].isBot
         NotificationCenter.default.post(name: .humanWonMatch, object: humanWon)
         return winner

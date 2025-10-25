@@ -13,13 +13,17 @@ struct LeaderEntry: Codable, Identifiable, Equatable {
     var currentStreak: Int
     var lastWinAt: Date?
 
+    // NEW: persistent bankroll (default $100 = 10_000 cents)
+    var bankrollCents: Int = 10_000
+
     init(id: UUID = UUID(),
          name: String,
          gamesWon: Int = 0,
          dollarsWonCents: Int = 0,
          longestStreak: Int = 0,
          currentStreak: Int = 0,
-         lastWinAt: Date? = nil) {
+         lastWinAt: Date? = nil,
+         bankrollCents: Int = 10_000) {
         self.id = id
         self.name = name
         self.gamesWon = gamesWon
@@ -27,6 +31,38 @@ struct LeaderEntry: Codable, Identifiable, Equatable {
         self.longestStreak = longestStreak
         self.currentStreak = currentStreak
         self.lastWinAt = lastWinAt
+        self.bankrollCents = bankrollCents
+    }
+}
+
+// Safe migration: default bankrollCents = 10_000 if missing in old saves
+extension LeaderEntry {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, gamesWon, dollarsWonCents, longestStreak, currentStreak, lastWinAt, bankrollCents
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        gamesWon = try c.decode(Int.self, forKey: .gamesWon)
+        dollarsWonCents = try c.decode(Int.self, forKey: .dollarsWonCents)
+        longestStreak = try c.decode(Int.self, forKey: .longestStreak)
+        currentStreak = try c.decode(Int.self, forKey: .currentStreak)
+        lastWinAt = try c.decodeIfPresent(Date.self, forKey: .lastWinAt)
+        bankrollCents = try c.decodeIfPresent(Int.self, forKey: .bankrollCents) ?? 10_000
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(gamesWon, forKey: .gamesWon)
+        try c.encode(dollarsWonCents, forKey: .dollarsWonCents)
+        try c.encode(longestStreak, forKey: .longestStreak)
+        try c.encode(currentStreak, forKey: .currentStreak)
+        try c.encodeIfPresent(lastWinAt, forKey: .lastWinAt)
+        try c.encode(bankrollCents, forKey: .bankrollCents)
     }
 }
 
@@ -68,6 +104,25 @@ final class LeaderboardStore: ObservableObject {
     func recordMatch(winnerName: String, loserNames: [String], potCents: Int) {
         recordWinner(name: winnerName, potCents: potCents)
         for l in loserNames { recordLoss(name: l) }
+    }
+
+    /// Update/persist a player's bankroll (used after each match).
+    func updateBankroll(name: String, bankrollCents: Int) {
+        let key = normalizeName(name)
+        if let i = indexOfName(key) {
+            entries[i].bankrollCents = bankrollCents
+        } else {
+            entries.append(LeaderEntry(
+                name: key,
+                gamesWon: 0,
+                dollarsWonCents: 0,
+                longestStreak: 0,
+                currentStreak: 0,
+                lastWinAt: nil,
+                bankrollCents: bankrollCents
+            ))
+        }
+        sortAndSave()
     }
 
     /// Remove everything.
@@ -162,7 +217,8 @@ final class LeaderboardStore: ObservableObject {
                 dollarsWonCents: max(0, potCents),
                 longestStreak: 1,
                 currentStreak: 1,
-                lastWinAt: Date()
+                lastWinAt: Date(),
+                bankrollCents: 10_000
             ))
         }
         sortAndSave()
@@ -235,6 +291,9 @@ final class LeaderboardStore: ObservableObject {
         } else {
             base.currentStreak = max(base.currentStreak, other.currentStreak)
         }
+
+        // NEW: bankroll—prefer the higher of the two to avoid accidental loss
+        base.bankrollCents = max(base.bankrollCents, other.bankrollCents)
 
         base.lastWinAt = latest
         return base

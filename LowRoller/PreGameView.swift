@@ -18,8 +18,11 @@ struct PreGameView: View {
     @State private var yourWagerCents = 500
     @State private var seats: [SeatCfg]
 
-    // For leaderboard confirm delete
+    // For leaderboard confirm delete / reset
     @State private var pendingDelete: LeaderEntry?
+    @State private var pendingReset: LeaderEntry?          // NEW
+
+    private let startingBankroll = 10_000                  // NEW ($100 in cents)
 
     // MARK: - Init
     init(youName: String, start: @escaping (_ engine: GameEngine) -> Void) {
@@ -142,7 +145,8 @@ struct PreGameView: View {
                             }
                         }
 
-                        let engine = GameEngine(players: players, youStart: youStart)
+                        // Pass the same leaderboard store so bankrolls hydrate properly
+                        let engine = GameEngine(players: players, youStart: youStart, leaders: leaders) // ← changed
                         start(engine)
                     } label: {
                         Label("Start Game", systemImage: "play.fill")
@@ -171,7 +175,16 @@ struct PreGameView: View {
                     } else {
                         ForEach(Array(top.enumerated()), id: \.element.id) { (i, e) in
                             LeaderRow(rank: i + 1, entry: e, metric: metric)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {   // ← changed
+                                    // NEW: Reset Balance
+                                    Button {
+                                        pendingReset = e
+                                    } label: {
+                                        Label("Reset Balance", systemImage: "arrow.counterclockwise")
+                                    }
+                                    .tint(.orange)
+
+                                    // Existing: Remove
                                     Button(role: .destructive) {
                                         pendingDelete = e
                                     } label: {
@@ -183,12 +196,14 @@ struct PreGameView: View {
                 } header: {
                     Text("All-Time Leaderboard")
                 } footer: {
-                    Text("Swipe left on a row to remove a player from all leaderboard views.")
+                    Text("Swipe left on a row to reset a bankroll or remove a player from the board.")
                 }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Low Roller")
             .scrollDismissesKeyboard(.interactively)
+
+            // Delete confirm
             .alert(
                 "Remove \(pendingDelete?.name ?? "player")?",
                 isPresented: Binding(
@@ -205,6 +220,25 @@ struct PreGameView: View {
                 }
             } message: {
                 Text("This will remove them from all leaderboard views.")
+            }
+
+            // NEW: Reset balance confirm
+            .alert(
+                "Reset \(pendingReset?.name ?? "player") balance?",
+                isPresented: Binding(
+                    get: { pendingReset != nil },
+                    set: { if !$0 { pendingReset = nil } }
+                )
+            ) {
+                Button("Cancel", role: .cancel) { pendingReset = nil }
+                Button("Reset") {
+                    if let entry = pendingReset {
+                        leaders.updateBankroll(name: entry.name, bankrollCents: startingBankroll)
+                    }
+                    pendingReset = nil
+                }
+            } message: {
+                Text("Sets their bankroll back to $\(startingBankroll/100). Wins and streaks remain unchanged.")
             }
         }
     }
@@ -230,17 +264,13 @@ struct PreGameView: View {
 // MARK: - SeatRow (sheet-based opponent picker; no context-menu warnings)
 private struct SeatRow: View {
     @Binding var seat: SeatCfg
-
-    // Provided from parent; useful if you later want to gray out taken names
     let usedBotIds: Set<UUID>
-
-    // Callbacks from parent (return identity so the row can update immediately)
     let onSurpriseMe: () -> BotIdentity
     let onPick: (BotIdentity) -> Void
     let onLevelChange: (AIBotLevel) -> BotIdentity
     let onToggleBot: (Bool) -> Void
 
-    @State private var showOpponentPicker = false   // ← sheet trigger
+    @State private var showOpponentPicker = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -272,7 +302,6 @@ private struct SeatRow: View {
                 }
                 .pickerStyle(.segmented)
 
-                // Button opens a sheet with the opponents list (no UIContextMenu involved)
                 Button {
                     showOpponentPicker = true
                 } label: {
@@ -281,7 +310,7 @@ private struct SeatRow: View {
                         Text(seat.name.isEmpty ? "Choose Opponent…" : seat.name)
                             .fontWeight(.semibold)
                         Spacer()
-                        Image(systemName: "chevron.up.chevron.down") // affordance for a chooser
+                        Image(systemName: "chevron.up.chevron.down")
                             .imageScale(.small)
                             .foregroundStyle(.secondary)
                     }

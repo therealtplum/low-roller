@@ -23,6 +23,9 @@ struct PreGameView: View {
     @State private var pendingDelete: LeaderEntry?
     @State private var pendingReset: LeaderEntry?
 
+    // About sheet
+    @State private var showAbout = false
+
     private let startingBankroll = 10_000 // $100 in cents
 
     // MARK: - Init
@@ -112,7 +115,7 @@ struct PreGameView: View {
                     VStack(spacing: 12) {
                         PotPreviewCard(
                             potCents: potPreview,
-                            playerCount: count,
+                            playerCount: count
                         )
                         .padding(.horizontal, 20) // match button edge
 
@@ -222,6 +225,16 @@ struct PreGameView: View {
                 } footer: {
                     Text("Swipe left on a row to reset a bankroll or remove a player from the board.")
                 }
+
+                // --- About (Bottom) ---
+                Section {
+                    Button {
+                        showAbout = true
+                    } label: {
+                        Label("About & Rules", systemImage: "info.circle")
+                            .fontWeight(.semibold)
+                    }
+                }
             } // <-- close List
             .listStyle(.insetGrouped)
             .navigationTitle("Low Roller")
@@ -263,6 +276,9 @@ struct PreGameView: View {
                 }
             } message: {
                 Text("Sets their bankroll back to $\(startingBankroll/100). Wins and streaks remain unchanged.")
+            }
+            .sheet(isPresented: $showAbout) {
+                AboutSheet()
             }
         }
     }
@@ -419,6 +435,119 @@ private struct OpponentPickerView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - AboutSheet
+private struct AboutSheet: View {
+    enum Tab: String, CaseIterable, Identifiable {
+        case rules = "Rules"
+        case about = "About"
+        var id: String { rawValue }
+    }
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var tab: Tab = .rules
+
+    private var appVersion: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+        return [v, b].compactMap { $0 }.joined(separator: " (\(Bundle.main.displayName)) build ")
+            .isEmpty ? "—" : "\(v ?? "—") (\(b ?? "—"))"
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                Picker("", selection: $tab) {
+                    ForEach(Tab.allCases) { t in Text(t.rawValue).tag(t) }
+                }
+                .pickerStyle(.segmented)
+                .padding()
+
+                Group {
+                    switch tab {
+                    case .rules:
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("How to Play")
+                                    .font(.title3).bold()
+                                Text("""
+                                • Each player begins with 7 dice and has to antes into the **Pot** at the start.
+                                • Turns proceed clockwise. On your turn, tap **Roll**.
+                                • After each roll, players must set aside _at least_ one die and as many as all the dice on the board.
+                                • The lowest total after rolling all dice wins the pot.
+                                • KEY! 3s count as 0 :)
+                                • **Ties** trigger **Sudden Death**: tied players roll again until one wins.
+                                • Bankroll persists between games (when enabled by your leaderboard store).
+                                """)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                                Divider().padding(.vertical, 8)
+
+                                Text("House Rules (optional)")
+                                    .font(.headline)
+                                Text("""
+                                • Double Pot on Tie: If enabled, first tie doubles the pot before roll-off.
+                                • You Start: If toggled in the lobby, the human starts; otherwise random.
+                                """)
+                            }
+                            .padding()
+                        }
+
+                    case .about:
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 14) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "dice.fill")
+                                        .imageScale(.large)
+                                    Text("Low Roller")
+                                        .font(.title3).bold()
+                                    Spacer()
+                                }
+
+                                if appVersion != "—" {
+                                    Text("Version: \(appVersion)")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Text("""
+                                A minimalist dice game with buttery-smooth SwiftUI animations, playful bots, and a persistent leaderboard.
+                                Built by Thomas Plummer.
+                                """)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                                Divider()
+
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Links").font(.headline)
+                                    Link("GitHub Repository", destination: URL(string: "https://github.com/therealtplum/low-roller")!)
+                                    Link("Developer on GitHub (@therealtplum)", destination: URL(string: "https://github.com/therealtplum")!)
+                                }
+
+                                Spacer(minLength: 8)
+                            }
+                            .padding()
+                        }
+                    }
+                }
+            }
+            .navigationTitle("About")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
+private extension Bundle {
+    var displayName: String {
+        object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ??
+        object(forInfoDictionaryKey: "CFBundleName") as? String ?? "App"
     }
 }
 

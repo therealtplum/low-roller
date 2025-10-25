@@ -1,3 +1,4 @@
+// UI/PreGameView.swift
 import SwiftUI
 import UIKit
 import Foundation
@@ -20,9 +21,9 @@ struct PreGameView: View {
 
     // For leaderboard confirm delete / reset
     @State private var pendingDelete: LeaderEntry?
-    @State private var pendingReset: LeaderEntry?          // NEW
+    @State private var pendingReset: LeaderEntry?
 
-    private let startingBankroll = 10_000                  // NEW ($100 in cents)
+    private let startingBankroll = 10_000 // $100 in cents
 
     // MARK: - Init
     init(youName: String, start: @escaping (_ engine: GameEngine) -> Void) {
@@ -106,56 +107,79 @@ struct PreGameView: View {
                     }
                 }
 
-                // --- Start ---
+                // --- Start (Pot + Button as a single row) ---
                 Section {
-                    HStack { Text("Pot preview"); Spacer(); Text("$\(potPreview / 100)") }
+                    VStack(spacing: 12) {
+                        PotPreviewCard(
+                            potCents: potPreview,
+                            playerCount: count,
+                        )
+                        .padding(.horizontal, 20) // match button edge
 
-                    Button {
-                        focusName = false
-                        UIApplication.shared.endEditing()
+                        Button {
+                            focusName = false
+                            UIApplication.shared.endEditing()
 
-                        var players: [Player] = []
-                        players.append(Player(
-                            id: UUID(),
-                            display: youName.isEmpty ? "You" : youName,
-                            isBot: false,
-                            botLevel: nil,
-                            wagerCents: yourWagerCents
-                        ))
+                            var players: [Player] = []
+                            players.append(Player(
+                                id: UUID(),
+                                display: youName.isEmpty ? "You" : youName,
+                                isBot: false,
+                                botLevel: nil,
+                                wagerCents: yourWagerCents
+                            ))
 
-                        for s in seats.prefix(count - 1) {
-                            if s.isBot {
-                                players.append(Player(
-                                    id: UUID(),
-                                    display: s.name.isEmpty
-                                        ? (s.botLevel == .pro ? "Pro Bot" : "Amateur Bot")
-                                        : s.name, // pun name if chosen/assigned
-                                    isBot: true,
-                                    botLevel: s.botLevel,
-                                    wagerCents: s.wagerCents
-                                ))
-                            } else {
-                                players.append(Player(
-                                    id: UUID(),
-                                    display: s.name.isEmpty ? "Player" : s.name,
-                                    isBot: false,
-                                    botLevel: nil,
-                                    wagerCents: s.wagerCents
-                                ))
+                            for s in seats.prefix(count - 1) {
+                                if s.isBot {
+                                    players.append(Player(
+                                        id: UUID(),
+                                        display: s.name.isEmpty
+                                            ? (s.botLevel == .pro ? "Pro Bot" : "Amateur Bot")
+                                            : s.name, // pun name if chosen/assigned
+                                        isBot: true,
+                                        botLevel: s.botLevel,
+                                        wagerCents: s.wagerCents
+                                    ))
+                                } else {
+                                    players.append(Player(
+                                        id: UUID(),
+                                        display: s.name.isEmpty ? "Player" : s.name,
+                                        isBot: false,
+                                        botLevel: nil,
+                                        wagerCents: s.wagerCents
+                                    ))
+                                }
                             }
-                        }
 
-                        // Pass the same leaderboard store so bankrolls hydrate properly
-                        let engine = GameEngine(players: players, youStart: youStart, leaders: leaders) // ← changed
-                        start(engine)
-                    } label: {
-                        Label("Start Game", systemImage: "play.fill")
-                            .font(.headline)
+                            // Pass the same leaderboard store so bankrolls hydrate properly
+                            let engine = GameEngine(players: players, youStart: youStart, leaders: leaders)
+                            start(engine)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "play.fill")
+                                    .font(.headline.weight(.bold))
+                                Text("Start Game")
+                                    .font(.headline.weight(.semibold))
+                            }
                             .frame(maxWidth: .infinity)
-                            .foregroundColor(.white)
+                            .padding(.vertical, 14)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(.ultraThinMaterial)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .strokeBorder(Color.white.opacity(0.3), lineWidth: 1)
+                                    )
+                                    .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 3)
+                            )
+                            .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 20)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
+                    // Make the whole pot+button group a single, edge-to-edge row
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 }
 
                 // --- All-Time Leaderboard (Top 10) ---
@@ -175,8 +199,8 @@ struct PreGameView: View {
                     } else {
                         ForEach(Array(top.enumerated()), id: \.element.id) { (i, e) in
                             LeaderRow(rank: i + 1, entry: e, metric: metric)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {   // ← changed
-                                    // NEW: Reset Balance
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    // Reset Balance
                                     Button {
                                         pendingReset = e
                                     } label: {
@@ -184,7 +208,7 @@ struct PreGameView: View {
                                     }
                                     .tint(.orange)
 
-                                    // Existing: Remove
+                                    // Remove
                                     Button(role: .destructive) {
                                         pendingDelete = e
                                     } label: {
@@ -198,7 +222,7 @@ struct PreGameView: View {
                 } footer: {
                     Text("Swipe left on a row to reset a bankroll or remove a player from the board.")
                 }
-            }
+            } // <-- close List
             .listStyle(.insetGrouped)
             .navigationTitle("Low Roller")
             .scrollDismissesKeyboard(.interactively)
@@ -222,7 +246,7 @@ struct PreGameView: View {
                 Text("This will remove them from all leaderboard views.")
             }
 
-            // NEW: Reset balance confirm
+            // Reset balance confirm
             .alert(
                 "Reset \(pendingReset?.name ?? "player") balance?",
                 isPresented: Binding(
@@ -396,6 +420,130 @@ private struct OpponentPickerView: View {
             }
         }
     }
+}
+
+// MARK: - PotPreviewCard
+private struct PotPreviewCard: View {
+    let potCents: Int
+    let playerCount: Int
+
+    @State private var pulse = false
+    @State private var lastPotCents = 0
+
+    var body: some View {
+        ZStack {
+            // Gradient base
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.green.opacity(0.85), Color.teal.opacity(0.85)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay(
+                    // Subtle glossy overlay
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .opacity(0.25)
+                )
+                .overlay(
+                    // Neon stroke that breathes when pot changes
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    pulse ? .white.opacity(0.9) : .white.opacity(0.25),
+                                    .white.opacity(0.05),
+                                    pulse ? .white.opacity(0.6) : .white.opacity(0.15)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 2
+                        )
+                        .shadow(radius: pulse ? 14 : 6)
+                        .animation(.easeInOut(duration: 0.6), value: pulse)
+                )
+                .shadow(color: .black.opacity(0.2), radius: 18, x: 0, y: 10)
+
+            // Content
+            HStack(spacing: 16) {
+                // Left: Symbols stack
+                VStack(spacing: 10) {
+                    Image(systemName: "die.face.5.fill")
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.95))
+                        .shadow(radius: 4)
+
+                    Image(systemName: "dollarsign.circle.fill")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                }
+                .padding(.leading, 6)
+
+                // Right: Text
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("POT")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .tracking(2)
+
+                    // Big dollar amount
+                    Text(formatCents(potCents))
+#if compiler(>=5.9)
+                        .contentTransition(.numericText())
+#endif
+                        .font(.system(size: 42, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .minimumScaleFactor(0.6)
+                        .lineLimit(1)
+
+                    // Subline: players + avg
+                    HStack(spacing: 10) {
+                        Label("\(playerCount) players", systemImage: "person.3.fill")
+                    }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .labelStyle(.titleAndIcon)
+                }
+
+                Spacer(minLength: 8)
+            }
+            .padding(18)
+        }
+        .frame(maxWidth: .infinity, minHeight: 110)
+        .padding(.horizontal, 16)
+        .onAppear { lastPotCents = potCents }
+        .onChange(of: potCents) { newValue in
+            if newValue != lastPotCents {
+                // Pulse + light haptic on change
+                UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { pulse = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                    withAnimation(.easeOut(duration: 0.3)) { pulse = false }
+                }
+                lastPotCents = newValue
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Pot preview")
+    }
+}
+
+// MARK: - Formatting
+private let _currencyFormatter: NumberFormatter = {
+    let f = NumberFormatter()
+    f.numberStyle = .currency
+    f.currencyCode = "USD"
+    f.maximumFractionDigits = 0
+    return f
+}()
+
+private func formatCents(_ cents: Int) -> String {
+    let dollars = Double(cents) / 100.0
+    return _currencyFormatter.string(from: NSNumber(value: round(dollars))) ?? "$\(Int(round(dollars)))"
 }
 
 // If you don’t already have this helper elsewhere:

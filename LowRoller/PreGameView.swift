@@ -3,6 +3,12 @@ import SwiftUI
 import UIKit
 import Foundation
 
+// File-scoped so nested views (e.g., SeatRow) can use it
+fileprivate func randomProWagerCents() -> Int {
+    // $15–$85 in $5 steps → 15,20,...,85 (in cents)
+    (Int.random(in: 3...17) * 5) * 100
+}
+
 struct PreGameView: View {
     // passed from App
     @State var youName: String
@@ -33,18 +39,32 @@ struct PreGameView: View {
         self.start = start
         _youName = State(initialValue: youName)
 
-        // Build seats with Player 2..8 labels; make seat 2 a bot by default
-        var initialSeats: [SeatCfg] = (2...8).map { i in
-            SeatCfg(isBot: i == 2, name: "Player \(i)", wagerCents: 500)
-        }
+        var taken = Set<UUID>() // ensure unique bot identities across seats
 
-        // Assign pun names immediately for any seats that start as bots (unique across lobby)
-        var used = Set<UUID>()
-        for idx in initialSeats.indices where initialSeats[idx].isBot {
-            let pick = BotRoster.random(level: initialSeats[idx].botLevel, avoiding: used)
-            used.insert(pick.id)
-            initialSeats[idx].botId = pick.id
-            initialSeats[idx].name  = pick.name
+        var initialSeats: [SeatCfg] = (2...8).map { i in
+            var cfg = SeatCfg(
+                isBot: true,                                 // default seats as bots
+                botLevel: i == 2 ? .pro : .amateur,          // seat 2 starts Pro by default
+                name: "",
+                botId: nil,
+                showPicker: false,
+                wagerCents: 500                              // default amateur wager
+            )
+
+            if cfg.isBot {
+                // Assign a random identity now so UI shows a real name
+                let pick = BotRoster.random(level: cfg.botLevel, avoiding: taken)
+                cfg.botId = pick.id
+                cfg.name  = pick.name
+                taken.insert(pick.id)
+
+                // If Pro, set the random $15–$85 default wager (in $5 steps)
+                if cfg.botLevel == .pro {
+                    cfg.wagerCents = randomProWagerCents()
+                }
+            }
+
+            return cfg
         }
 
         _seats = State(initialValue: initialSeats)
@@ -95,12 +115,24 @@ struct PreGameView: View {
 
                             // Pass the level down, pick at parent (for uniqueness), return the identity
                             onLevelChange: { newLevel in
-                                assignRandomBotReturning(forIndex: i, to: newLevel, preferUnique: true)
+                                let pick = assignRandomBotReturning(forIndex: i, to: newLevel, preferUnique: true)
+                                // If switching to Pro, give the random default wager immediately
+                                if newLevel == .pro {
+                                    seats[i].wagerCents = randomProWagerCents()
+                                }
+                                return pick
                             },
 
                             onToggleBot: { isOn in
                                 if isOn {
-                                    _ = assignRandomBotReturning(forIndex: i, preferUnique: true)
+                                    let pick = assignRandomBotReturning(forIndex: i, preferUnique: true)
+                                    // If this seat is Pro already, apply the random default wager
+                                    if seats[i].botLevel == .pro {
+                                        seats[i].wagerCents = randomProWagerCents()
+                                    }
+                                    // Ensure UI reflects identity immediately
+                                    seats[i].botId = pick.id
+                                    seats[i].name  = pick.name
                                 } else {
                                     seats[i].botId = nil
                                     if seats[i].name.isEmpty { seats[i].name = "Player \(i + 2)" }
@@ -323,6 +355,9 @@ private struct SeatRow: View {
                         let pick = onSurpriseMe()
                         seat.botId = pick.id
                         seat.name  = pick.name
+                        if seat.botLevel == .pro {
+                            seat.wagerCents = randomProWagerCents()
+                        }
                     }
                 }
             ))
@@ -341,6 +376,12 @@ private struct SeatRow: View {
                     Text("Pro").tag(AIBotLevel.pro)
                 }
                 .pickerStyle(.segmented)
+                .onChange(of: seat.botLevel) { oldValue, newValue in
+                    guard seat.isBot else { return }
+                    if newValue == .pro {
+                        seat.wagerCents = randomProWagerCents()
+                    }
+                }
 
                 Button {
                     showOpponentPicker = true
@@ -375,7 +416,6 @@ private struct SeatRow: View {
                     )
                     .presentationDetents([.medium, .large])
                 }
-
             } else {
                 TextField("Name", text: $seat.name)
                     .textInputAutocapitalization(.words)
@@ -645,15 +685,14 @@ private struct PotPreviewCard: View {
         .frame(maxWidth: .infinity, minHeight: 110)
         .padding(.horizontal, 16)
         .onAppear { lastPotCents = potCents }
-        .onChange(of: potCents) { newValue in
-            if newValue != lastPotCents {
+        .onChange(of: potCents) { oldValue, newValue in
+            if newValue != oldValue {
                 // Pulse + light haptic on change
                 UIImpactFeedbackGenerator(style: .soft).impactOccurred()
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { pulse = true }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
                     withAnimation(.easeOut(duration: 0.3)) { pulse = false }
                 }
-                lastPotCents = newValue
             }
         }
         .accessibilityElement(children: .ignore)

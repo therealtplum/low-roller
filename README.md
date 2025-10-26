@@ -20,3 +20,8 @@ You can roll, pick dice (must pick >=1), use "Timeout Fallback" to simulate the 
 ## Next
 - Build `engine-wasm/` and swap `web/src/game/engine.ts` import to use real WASM bindings.
 - Add bots taking turns automatically, sudden death UI, SQLite persistence, LAN rooms.
+
+- **iOS (SwiftUI)** — open `LowRoller.xcodeproj` (source in `LowRoller/`)
+- **Desktop**
+  - Rust engine → `desktop/engine`
+  - Web UI     → `desktop/web`

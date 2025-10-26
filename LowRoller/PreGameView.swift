@@ -513,24 +513,14 @@ private struct AboutSheet: View {
                                 Text("How to Play")
                                     .font(.title3).bold()
                                 Text("""
-                                • Each player begins with 7 dice and has to antes into the **Pot** at the start.
+                                • Each player begins with 7 dice and has to ante into the **Pot** at the start.
                                 • Turns proceed clockwise. On your turn, tap **Roll**.
                                 • After each roll, players must set aside _at least_ one die and as many as all the dice on the board.
                                 • The lowest total after rolling all dice wins the pot.
                                 • KEY! 3s count as 0 :)
-                                • **Ties** trigger **Sudden Death**: tied players roll again until one wins.
-                                • Bankroll persists between games (when enabled by your leaderboard store).
+                                • **Ties** trigger **Sudden Death**: tied players roll again until one player wins.
                                 """)
                                 .fixedSize(horizontal: false, vertical: true)
-
-                                Divider().padding(.vertical, 8)
-
-                                Text("House Rules (optional)")
-                                    .font(.headline)
-                                Text("""
-                                • Double Pot on Tie: If enabled, first tie doubles the pot before roll-off.
-                                • You Start: If toggled in the lobby, the human starts; otherwise random.
-                                """)
                             }
                             .padding()
                         }

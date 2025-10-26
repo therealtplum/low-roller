@@ -18,7 +18,7 @@ struct HUDView: View {
                 Spacer(minLength: 12)
 
                 // House bank
-                Text("🏦 Bank: \(currency(engine.state.potCents))")
+                Text("🏦 Bank: \(currency(economy.houseCents))")
 
                 Spacer(minLength: 12)
 
@@ -37,7 +37,7 @@ struct HUDView: View {
                                 .fontWeight(i == engine.state.turnIdx ? .bold : .regular)
 
                             // Bankroll (colored)
-                            Text(currency(p.bankrollCents))
+                            Text("Balance: \(currency(p.bankrollCents))")
                                 .font(.caption)
                                 .foregroundStyle(p.bankrollCents >= 0 ? .green : .red)
                                 .monospacedDigit()

@@ -23,5 +23,5 @@ You can roll, pick dice (must pick >=1), use "Timeout Fallback" to simulate the 
 
 - **iOS (SwiftUI)** — open `LowRoller.xcodeproj` (source in `LowRoller/`)
 - **Desktop**
-  - Rust engine → `desktop/engine`
-  - Web UI     → `desktop/web`
+  - Rust engine → `LowRollerDesktop/engine`
+  - Web UI     → `LowRollerDesktop/web`

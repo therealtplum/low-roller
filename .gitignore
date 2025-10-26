@@ -2,5 +2,5 @@
 .DS_Store
 
 # Desktop build artifacts
-/desktop/engine/target/
-/desktop/web/node_modules/
+/LowRollerDesktop/engine/target/
+/LowRollerDesktop/web/node_modules/

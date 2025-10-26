@@ -42,20 +42,6 @@ struct GameView: View {
             VStack(spacing: 16) {
                 HUDView(engine: engine, timeLeft: timeLeft)
 
-                // NEW: economy strip (Pot + House)
-                HStack(spacing: 16) {
-                    Label {
-                        Text("Pot \(currency(startingPotCents))")
-                    } icon: { Image(systemName: "cube.box.fill") }
-
-                    Label {
-                        Text("House \(currency(economy.houseCents))")
-                    } icon: { Image(systemName: "banknote.fill") }
-                }
-                .font(.subheadline)
-                .opacity(0.9)
-                .padding(.top, -8)
-
                 // --- Dice area ---
                 ZStack {
                     RoundedRectangle(cornerRadius: 14)

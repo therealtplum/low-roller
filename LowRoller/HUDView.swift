@@ -12,27 +12,21 @@ struct HUDView: View {
         VStack(alignment: .leading, spacing: 8) {
             // Top row: Pot • House • Timer
             HStack {
-                Label {
-                    Text(currency(engine.state.potCents))
-                } icon: {
-                    Image(systemName: "cube.box.fill")
-                }
+                // Pot amount
+                Text("💰 Pot: \(currency(engine.state.potCents))")
 
                 Spacer(minLength: 12)
 
-                Label {
-                    Text(currency(economy.houseCents))
-                } icon: {
-                    Image(systemName: "banknote.fill")
-                }
+                // House bank
+                Text("🏦 Bank: \(currency(engine.state.potCents))")
 
-                Spacer()
+                Spacer(minLength: 12)
 
-                Text("⏱ \(timeLeft/60):\(String(format: "%02d", timeLeft%60))")
+                // Timer
+                Text("⏱ \(timeLeft / 60):\(String(format: "%02d", timeLeft % 60))")
                     .monospacedDigit()
             }
             .font(.headline)
-
             // Players strip
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {

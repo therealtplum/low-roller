@@ -21,6 +21,7 @@ struct LeaderRow: View {
         case .dollars: return currencyString(cents: entry.dollarsWonCents)
         case .wins:    return "\(entry.gamesWon)"
         case .streak:  return "\(entry.longestStreak)"
+        case .balance: return currencyString(cents: entry.bankrollCents)
         }
     }
 
@@ -29,6 +30,19 @@ struct LeaderRow: View {
         case .dollars: return "dollarsign.circle.fill"
         case .wins:    return "trophy.fill"
         case .streak:  return "flame.fill"
+        case .balance: return "creditcard.fill"
+        }
+    }
+
+    // MARK: - Color logic (only for Current Balance)
+    private var balanceColor: Color {
+        guard metric == .balance else { return .primary }
+        if entry.bankrollCents < 0 {
+            return .red
+        } else if entry.bankrollCents > 10_000 { // $100 in cents
+            return .green
+        } else {
+            return .primary
         }
     }
 
@@ -54,11 +68,13 @@ struct LeaderRow: View {
             Text(rightText)
                 .font(.headline)
                 .monospacedDigit()
+                .foregroundColor(balanceColor) // ✅ only affects Current Balance
                 .accessibilityLabel({
                     switch metric {
                     case .dollars: return Text("Total dollars won \(rightText)")
                     case .wins:    return Text("Total wins \(rightText)")
                     case .streak:  return Text("Longest streak \(rightText)")
+                    case .balance: return Text("Current balance \(rightText)")
                     }
                 }())
 

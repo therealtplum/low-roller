@@ -70,6 +70,7 @@ enum LeaderMetric: String, CaseIterable, Identifiable {
     case dollars = "Most $ Won"
     case wins = "Most Wins"
     case streak = "Longest Streak"
+    case balance = "Current Balance"
     var id: String { rawValue }
 }
 
@@ -177,8 +178,17 @@ final class LeaderboardStore: ObservableObject {
                 }
                 return $0.longestStreak > $1.longestStreak
             }
-        }
-        return Array(sorted.prefix(10))
+        
+        case .balance:
+            sorted = entries.sorted {
+                if $0.bankrollCents == $1.bankrollCents {
+                    return ($0.dollarsWonCents, $0.gamesWon, $0.name.lowercased())
+                        > ($1.dollarsWonCents, $1.gamesWon, $1.name.lowercased())
+                }
+                return $0.bankrollCents > $1.bankrollCents
+            }
+}
+        return metric == .balance ? sorted : Array(sorted.prefix(10))
     }
 
     // MARK: - Optional migration for old bug

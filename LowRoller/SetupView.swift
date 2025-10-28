@@ -77,6 +77,15 @@ struct SetupView: View {
                             set: { seats[i].name = $0 }
                         ))
                         .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            // Validate name when user finishes editing
+                            if !NameValidator.isValidName(seats[i].name) {
+                                seats[i].name = NameValidator.sanitizeName(
+                                    seats[i].name,
+                                    fallback: "Player \(i + 2)"  // +2 because Player 1 is "You"
+                                )
+                            }
+                        }
                     }
                 }
             }

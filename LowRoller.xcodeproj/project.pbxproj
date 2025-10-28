@@ -66,6 +66,11 @@
 			path = Analytics;
 			sourceTree = "<group>";
 		};
+		C4F9036D2EB18AD4008AF919 /* Docs */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Docs;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -89,6 +94,7 @@
 		C48478882EA8FC1D00AE9CBD = {
 			isa = PBXGroup;
 			children = (
+				C4F9036D2EB18AD4008AF919 /* Docs */,
 				C4F903532EAEE07A008AF919 /* Analytics */,
 				C48478932EA8FC1E00AE9CBD /* LowRoller */,
 				C4AA42DC2EAED8FB005D9286 /* LowRollerTests */,
@@ -146,6 +152,7 @@
 			fileSystemSynchronizedGroups = (
 				C4AA42DC2EAED8FB005D9286 /* LowRollerTests */,
 				C4F903532EAEE07A008AF919 /* Analytics */,
+				C4F9036D2EB18AD4008AF919 /* Docs */,
 			);
 			name = LowRollerTests;
 			packageProductDependencies = (

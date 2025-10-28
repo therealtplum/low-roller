@@ -84,9 +84,12 @@ struct PreGameView: View {
                 // --- YOU ---
                 Section {
                     TextField("Your name", text: $youName)
-                        .focused($focusName)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled()
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            if !NameValidator.isValidName(youName) {
+                                youName = NameValidator.sanitizeName(youName, fallback: "You")
+                            }
+                        }
 
                     Stepper(value: $yourWagerCents, in: 500...10000, step: 500) {
                         HStack { Text("Your buy-in"); Spacer(); Text("$\(yourWagerCents / 100)") }
@@ -151,9 +154,15 @@ struct PreGameView: View {
                             UIApplication.shared.endEditing()
 
                             var players: [Player] = []
+                            
+                            // Validate "You" player name
+                            let validatedYouName = NameValidator.isValidName(youName)
+                                ? youName
+                                : NameValidator.sanitizeName(youName, fallback: "You")
+                            
                             players.append(Player(
                                 id: UUID(),
-                                display: youName.isEmpty ? "You" : youName,
+                                display: validatedYouName.isEmpty ? "You" : validatedYouName,
                                 isBot: false,
                                 botLevel: nil,
                                 wagerCents: yourWagerCents
@@ -171,9 +180,14 @@ struct PreGameView: View {
                                         wagerCents: s.wagerCents
                                     ))
                                 } else {
+                                    // Validate human player names
+                                    let validatedName = NameValidator.isValidName(s.name)
+                                        ? s.name
+                                        : NameValidator.sanitizeName(s.name, fallback: "Player")
+                                    
                                     players.append(Player(
                                         id: UUID(),
-                                        display: s.name.isEmpty ? "Player" : s.name,
+                                        display: validatedName.isEmpty ? "Player" : validatedName,
                                         isBot: false,
                                         botLevel: nil,
                                         wagerCents: s.wagerCents

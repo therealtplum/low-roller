@@ -14,7 +14,7 @@ struct DiceView: View {
     let face: Int
     var selected: Bool = false
     var size: CGFloat = 54
-    let shakeToken: Int  // 👈 add this
+    let shakeToken: Int
 
     var body: some View {
         let _ = max(8, size * 0.14)

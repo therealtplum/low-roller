@@ -15,6 +15,11 @@ struct LowRollerApp: App {
     @State private var engine: GameEngine? = nil
     @AppStorage("lowroller_name_ios") private var storedName: String = "You"
 
+    init() {
+        // Turn analytics on (optional: gate behind a Settings toggle)
+        AnalyticsSwitch.enabled = true
+    }
+
     var body: some Scene {
         WindowGroup {
             Group {
@@ -36,10 +41,20 @@ struct LowRollerApp: App {
             .preferredColorScheme(.dark)
             // Quiet keyboard/RTI warnings by dismissing focus on lifecycle changes
             .onChange(of: scenePhase) { _, phase in
-                if phase == .inactive || phase == .background {
+                switch phase {
+                case .inactive, .background:
                     UIApplication.shared.endEditing()
+                    AnalyticsLogger.shared.flush()
+                default:
+                    break
                 }
             }
         }
+    }
+}
+
+extension UIApplication {
+    func endEditing() {
+        sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }

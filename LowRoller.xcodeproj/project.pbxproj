@@ -6,14 +6,64 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		C4AA42DF2EAED8FB005D9286 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C48478892EA8FC1D00AE9CBD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C48478902EA8FC1E00AE9CBD;
+			remoteInfo = LowRoller;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		C48478912EA8FC1E00AE9CBD /* LowRoller.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LowRoller.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C4AA42DB2EAED8FB005D9286 /* LowRollerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LowRollerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		C4F9035D2EAEE11D008AF919 /* Exceptions for "Analytics" folder in "LowRollerTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				AnalyticsEvent.swift,
+				AnalyticsExportView.swift,
+				AnalyticsLogger.swift,
+				AnalyticsSwitch.swift,
+				Log.swift,
+			);
+			target = C4AA42DA2EAED8FB005D9286 /* LowRollerTests */;
+		};
+		C4F9035F2EAEE121008AF919 /* Exceptions for "Analytics" folder in "LowRoller" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				AnalyticsEvent.swift,
+				AnalyticsExportView.swift,
+				AnalyticsLogger.swift,
+				AnalyticsSwitch.swift,
+				Log.swift,
+			);
+			target = C48478902EA8FC1E00AE9CBD /* LowRoller */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		C48478932EA8FC1E00AE9CBD /* LowRoller */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = LowRoller;
+			sourceTree = "<group>";
+		};
+		C4AA42DC2EAED8FB005D9286 /* LowRollerTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = LowRollerTests;
+			sourceTree = "<group>";
+		};
+		C4F903532EAEE07A008AF919 /* Analytics */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				C4F9035F2EAEE121008AF919 /* Exceptions for "Analytics" folder in "LowRoller" target */,
+				C4F9035D2EAEE11D008AF919 /* Exceptions for "Analytics" folder in "LowRollerTests" target */,
+			);
+			path = Analytics;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -26,13 +76,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C4AA42D82EAED8FB005D9286 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		C48478882EA8FC1D00AE9CBD = {
 			isa = PBXGroup;
 			children = (
+				C4F903532EAEE07A008AF919 /* Analytics */,
 				C48478932EA8FC1E00AE9CBD /* LowRoller */,
+				C4AA42DC2EAED8FB005D9286 /* LowRollerTests */,
 				C48478922EA8FC1E00AE9CBD /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +100,7 @@
 			isa = PBXGroup;
 			children = (
 				C48478912EA8FC1E00AE9CBD /* LowRoller.app */,
+				C4AA42DB2EAED8FB005D9286 /* LowRollerTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -70,6 +130,30 @@
 			productReference = C48478912EA8FC1E00AE9CBD /* LowRoller.app */;
 			productType = "com.apple.product-type.application";
 		};
+		C4AA42DA2EAED8FB005D9286 /* LowRollerTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C4AA42E12EAED8FB005D9286 /* Build configuration list for PBXNativeTarget "LowRollerTests" */;
+			buildPhases = (
+				C4AA42D72EAED8FB005D9286 /* Sources */,
+				C4AA42D82EAED8FB005D9286 /* Frameworks */,
+				C4AA42D92EAED8FB005D9286 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C4AA42E02EAED8FB005D9286 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				C4AA42DC2EAED8FB005D9286 /* LowRollerTests */,
+				C4F903532EAEE07A008AF919 /* Analytics */,
+			);
+			name = LowRollerTests;
+			packageProductDependencies = (
+			);
+			productName = LowRollerTests;
+			productReference = C4AA42DB2EAED8FB005D9286 /* LowRollerTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -82,6 +166,11 @@
 				TargetAttributes = {
 					C48478902EA8FC1E00AE9CBD = {
 						CreatedOnToolsVersion = 26.0.1;
+					};
+					C4AA42DA2EAED8FB005D9286 = {
+						CreatedOnToolsVersion = 26.0.1;
+						LastSwiftMigration = 2600;
+						TestTargetID = C48478902EA8FC1E00AE9CBD;
 					};
 				};
 			};
@@ -100,12 +189,20 @@
 			projectRoot = "";
 			targets = (
 				C48478902EA8FC1E00AE9CBD /* LowRoller */,
+				C4AA42DA2EAED8FB005D9286 /* LowRollerTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		C484788F2EA8FC1E00AE9CBD /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C4AA42D92EAED8FB005D9286 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -122,7 +219,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C4AA42D72EAED8FB005D9286 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C4AA42E02EAED8FB005D9286 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C48478902EA8FC1E00AE9CBD /* LowRoller */;
+			targetProxy = C4AA42DF2EAED8FB005D9286 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		C484789C2EA8FC1F00AE9CBD /* Debug */ = {
@@ -255,7 +367,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = LowRolleriOS;
+				INFOPLIST_KEY_CFBundleDisplayName = LowRoller;
 				INFOPLIST_KEY_NSCameraUsageDescription = CAMERA_USAGE_DESCRIPTION;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -304,7 +416,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = LowRolleriOS;
+				INFOPLIST_KEY_CFBundleDisplayName = LowRoller;
 				INFOPLIST_KEY_NSCameraUsageDescription = CAMERA_USAGE_DESCRIPTION;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -339,6 +451,66 @@
 			};
 			name = Release;
 		};
+		C4AA42E22EAED8FB005D9286 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9XWB6J52M7;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SNOW.LowRollerTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = "Analytics/LowRollerTests-Bridging-Header.h";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LowRoller.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LowRoller";
+			};
+			name = Debug;
+		};
+		C4AA42E32EAED8FB005D9286 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9XWB6J52M7;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SNOW.LowRollerTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = "Analytics/LowRollerTests-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LowRoller.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LowRoller";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -356,6 +528,15 @@
 			buildConfigurations = (
 				C484789F2EA8FC1F00AE9CBD /* Debug */,
 				C48478A02EA8FC1F00AE9CBD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C4AA42E12EAED8FB005D9286 /* Build configuration list for PBXNativeTarget "LowRollerTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C4AA42E22EAED8FB005D9286 /* Debug */,
+				C4AA42E32EAED8FB005D9286 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

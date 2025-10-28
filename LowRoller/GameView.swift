@@ -7,11 +7,11 @@ struct GameView: View {
     @ObservedObject var engine: GameEngine
     @StateObject private var leaders = LeaderboardStore()
 
-    // NEW: observe House
+    // Observe House (if you show any house metrics in HUD)
     @ObservedObject private var economy = EconomyStore.shared
 
     @State private var botCtl: BotController?
-    @State private var picked: Set<Int> = []
+    @State private var picked: Set<Int> = Set<Int>()   // avoid inference choke
     @State private var rollShake: Int = 0
     @State private var showConfetti = false
 
@@ -22,19 +22,27 @@ struct GameView: View {
     // Ensure leaderboard is written once per game
     @State private var wroteOutcome = false
 
-    // Track the *pre-payout* pot so we can record correct winnings
+    // Track the (growing) pre-payout pot so we record/display correct winnings
     @State private var startingPotCents: Int = 0
 
-    // Sudden Death animation overlay state
+    // Sudden Death animation overlay state (multi-way)
     @State private var sdShowOverlay = false
     @State private var sdRolling = false
-    @State private var sdUserAnimFace: Int = 1
-    @State private var sdBotAnimFace: Int = 1
+    @State private var sdAnimFaces: [Int:Int] = [:]     // playerIdx -> face while spinning
     @State private var sdRollTimer: Timer?
+
+    // Anti-flash / anti-retrigger flags
+    @State private var sdHasRevealed = false
+    @State private var sdRevealAt: Date? = nil
+
+    // Snapshot of the final SD faces (so UI can still display after engine advances phase)
+    @State private var sdResultFacesSnap: [Int:Int] = [:]     // playerIdx -> rolled face (1...6)
+    @State private var sdResultOrderSnap: [Int] = []          // stable order of players to show
 
     private var isYourTurn: Bool { !engine.state.players[engine.state.turnIdx].isBot }
     private var isFinished: Bool { engine.state.phase == .finished }
     private var isSuddenDeath: Bool { engine.state.phase == .suddenDeath }
+    private var inAwaitDouble: Bool { engine.state.phase == .awaitDouble }
 
     var body: some View {
         ZStack {
@@ -80,7 +88,7 @@ struct GameView: View {
                                              size: dieSize,
                                              shakeToken: rollShake)
                                     .onTapGesture {
-                                        guard isYourTurn, !isFinished else { return }
+                                        guard isYourTurn, !isFinished, !inAwaitDouble else { return }
                                         withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
                                             if picked.contains(i) { picked.remove(i) } else { picked.insert(i) }
                                         }
@@ -96,26 +104,43 @@ struct GameView: View {
                 .padding(.horizontal)
                 .frame(minHeight: 360)
 
-                // --- Sudden Death UI ---
+                // --- Sudden Death UI (multi-way) ---
                 if isSuddenDeath {
                     VStack(spacing: 10) {
                         Text("Sudden Death!")
                             .font(.title2).bold()
-                        Text("One roll each. Low score wins.")
-                            .foregroundStyle(.secondary)
+                        if let contenders = engine.state.suddenContenders {
+                            Text(contenders.count == 2 ? "Lowest roll is eliminated (re-roll ties)." :
+                                 "Group sudden death: lowest roll is eliminated (re-roll ties).")
+                                .foregroundStyle(.secondary)
 
-                        // Show most recent results (if any) below the button in the normal flow
-                        if let a = engine.state.suddenFaces.p0, let b = engine.state.suddenFaces.p1 {
-                            let aAdj = (a == 3) ? 0 : a
-                            let bAdj = (b == 3) ? 0 : b
-                            Text("Last: You \(a) → \(aAdj)   •   Bot \(b) → \(bAdj)")
-                                .monospaced()
+                            // Show most recent results (if any)
+                            if let rolls = engine.state.suddenRolls {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ForEach(contenders, id: \.self) { idx in
+                                        let name = engine.state.players[idx].display
+                                        let face = rolls[idx]
+                                        HStack {
+                                            Text(name).font(.subheadline.weight(.medium))
+                                            Spacer()
+                                            if let f = face {
+                                                let adj = (f == 3) ? 0 : f
+                                                Text("\(f) → \(adj)").monospaced()
+                                            } else {
+                                                Text("—").monospaced()
+                                            }
+                                        }
+                                    }
+                                }
+                                .padding(.horizontal)
+                            }
                         }
 
                         Button {
+                            guard engine.state.phase == .suddenDeath else { return }
                             startSuddenDeathAnimationAndResolve()
                         } label: {
-                            Text(engine.state.suddenFaces.p0 == nil ? "Roll Sudden Death" : "Roll Again")
+                            Text((engine.state.suddenRolls == nil) ? "Roll Sudden Death" : "Roll Again")
                                 .font(.title3.weight(.bold))
                                 .padding(.vertical, 10)
                                 .frame(maxWidth: .infinity)
@@ -123,13 +148,55 @@ struct GameView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(.orange)
                         .padding(.horizontal)
+                        .disabled(sdShowOverlay || sdHasRevealed) // prevent retrigger while overlay is active or after reveal
                     }
+                }
+
+                // --- Double-or-Nothing decision bar (pre-payout) ---
+                if inAwaitDouble {
+                    VStack(spacing: 10) {
+                        Text(doubleHeadline)
+                            .font(.headline)
+                        HStack(spacing: 12) {
+                            Button {
+                                engine.acceptDoubleOrNothing()
+                                // Reset local UI state for fresh round
+                                picked.removeAll()
+                                rollShake = 0
+                                sdShowOverlay = false
+                                sdRolling = false
+                                sdAnimFaces.removeAll()
+                                stopSuddenDeathRollTimer()
+                                showConfetti = false
+                                scheduleTurnTimer()
+                            } label: {
+                                Text(doubleButtonTitle)
+                                    .font(.subheadline.weight(.semibold))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.green.opacity(0.15))
+                                    .cornerRadius(8)
+                            }
+
+                            Button {
+                                engine.declineDoubleOrNothing() // engine finalizes, pays, posts notify
+                            } label: {
+                                Text("Settle Now")
+                                    .font(.subheadline.weight(.semibold))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.red.opacity(0.15))
+                                    .cornerRadius(8)
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
                 }
 
                 // --- Primary buttons (Roll + Set Aside) ---
                 HStack(spacing: 20) {
                     Button {
-                        guard isYourTurn, !isFinished, engine.state.lastFaces.isEmpty else { return }
+                        guard isYourTurn, !isFinished, !inAwaitDouble, engine.state.lastFaces.isEmpty else { return }
                         // Trigger dice shake
                         withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
                         withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
@@ -143,10 +210,10 @@ struct GameView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
-                    .disabled(!isYourTurn || isFinished || isSuddenDeath || !engine.state.lastFaces.isEmpty || engine.state.remainingDice == 0)
+                    .disabled(!isYourTurn || isFinished || isSuddenDeath || inAwaitDouble || !engine.state.lastFaces.isEmpty || engine.state.remainingDice == 0)
 
                     Button {
-                        guard isYourTurn, !isFinished, !picked.isEmpty else { return }
+                        guard isYourTurn, !isFinished, !inAwaitDouble, !picked.isEmpty else { return }
                         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
                         engine.pick(indices: Array(picked))
                         picked.removeAll()
@@ -158,13 +225,14 @@ struct GameView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.blue)
-                    .disabled(!isYourTurn || isFinished || isSuddenDeath || picked.isEmpty)
+                    .disabled(!isYourTurn || isFinished || isSuddenDeath || inAwaitDouble || picked.isEmpty)
                 }
                 .padding(.horizontal)
                 .padding(.top, 4)
 
                 // --- Timeout fallback (secondary button) ---
                 Button {
+                    guard !isFinished, !isSuddenDeath, !inAwaitDouble else { return }
                     if engine.state.lastFaces.isEmpty && engine.state.remainingDice > 0 {
                         withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
                         engine.roll()
@@ -180,7 +248,7 @@ struct GameView: View {
                         .clipShape(Capsule())
                 }
                 .padding(.top, 4)
-                .disabled(isFinished || isSuddenDeath)
+                .disabled(isFinished || isSuddenDeath || inAwaitDouble)
 
                 // --- End of Game UI (read-only) ---
                 if isFinished {
@@ -199,6 +267,7 @@ struct GameView: View {
                         Text("Game Over").font(.headline)
                         Text("Winner: \(winner.display) • Total: \(winner.totalScore) • Pot: \(currency(startingPotCents))")
                             .multilineTextAlignment(.center)
+
                         Button("Back to Lobby") {
                             // No leaderboard writes here (handled once in onChange below)
                             NotificationCenter.default.post(name: .lowRollerBackToLobby, object: nil)
@@ -216,35 +285,81 @@ struct GameView: View {
                 .allowsHitTesting(false)
                 .ignoresSafeArea()
 
-            // ---- Sudden Death animation overlay (on top even if phase flips to .finished) ----
+            // ---- Sudden Death animation overlay (multi-way) ----
             if sdShowOverlay {
                 Color.black.opacity(0.55).ignoresSafeArea()
                 VStack(spacing: 14) {
                     Text(sdRolling ? "Rolling…" : "Sudden Death Result")
                         .font(.title3.weight(.semibold))
 
-                    HStack(spacing: 28) {
-                        VStack(spacing: 8) {
-                            Text("You").font(.caption).foregroundStyle(.secondary)
-                            DiceView(face: sdRolling ? sdUserAnimFace : (engine.state.suddenFaces.p0 ?? sdUserAnimFace),
-                                     selected: false,
-                                     size: 96,
-                                     shakeToken: rollShake)
-                        }
-                        VStack(spacing: 8) {
-                            Text("Bot").font(.caption).foregroundStyle(.secondary)
-                            DiceView(face: sdRolling ? sdBotAnimFace : (engine.state.suddenFaces.p1 ?? sdBotAnimFace),
-                                     selected: false,
-                                     size: 96,
-                                     shakeToken: rollShake)
+                    // Prefer live engine SD state; if engine has advanced, show the snapshot
+                    let contenders = engine.state.suddenContenders ?? sdResultOrderSnap
+                    let faceSource: (Int) -> Int? = { idx in
+                        if sdRolling {
+                            return sdAnimFaces[idx]
+                        } else {
+                            return engine.state.suddenRolls?[idx] ?? sdResultFacesSnap[idx]
                         }
                     }
 
-                    if !sdRolling, let a = engine.state.suddenFaces.p0, let b = engine.state.suddenFaces.p1 {
-                        let aAdj = (a == 3) ? 0 : a
-                        let bAdj = (b == 3) ? 0 : b
-                        Text("You \(a) → \(aAdj)   •   Bot \(b) → \(bAdj)")
-                            .monospaced()
+                    if !contenders.isEmpty {
+                        GeometryReader { geo in
+                            let count = contenders.count
+                            // Columns: 1 for single, 2 fixed for two, adaptive for 3+
+                            let columns: [GridItem] = {
+                                if count <= 1 { return [GridItem(.flexible(), spacing: 16)] }
+                                if count == 2 { return [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)] }
+                                return [GridItem(.adaptive(minimum: 72), spacing: 16)]
+                            }()
+
+                            // Die size: bigger when only 1–2 contenders
+                            let dieSize: CGFloat = {
+                                if count <= 1 { return min(140, max(90, geo.size.width * 0.35)) }
+                                if count == 2 { return min(120, max(84, geo.size.width * 0.28)) }
+                                return 72
+                            }()
+
+                            LazyVGrid(columns: columns, spacing: 16) {
+                                ForEach(contenders, id: \.self) { idx in
+                                    let name = engine.state.players.indices.contains(idx)
+                                        ? engine.state.players[idx].display
+                                        : "Player \(idx+1)"
+                                    let faceToShow = faceSource(idx) ?? 1
+                                    VStack(spacing: 6) {
+                                        DiceView(face: faceToShow,
+                                                 selected: false,
+                                                 size: dieSize,
+                                                 shakeToken: rollShake)
+                                        Text(name).font(.caption).lineLimit(1).truncationMode(.tail)
+                                    }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        }
+                        .frame(height: 200)
+                        .padding(.top, 6)
+
+                        if !sdRolling {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(contenders, id: \.self) { idx in
+                                    if let f = faceSource(idx) {
+                                        let adj = (f == 3) ? 0 : f
+                                        let name = engine.state.players.indices.contains(idx)
+                                            ? engine.state.players[idx].display
+                                            : "Player \(idx+1)"
+                                        Text("\(name): \(f) → \(adj)")
+                                            .monospaced()
+                                    }
+                                }
+                            }
+                            .padding(.top, 4)
+                        }
+                    }
+
+                    if !sdRolling {
+                        Text("Tap to continue")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.secondary)
                             .padding(.top, 2)
                     }
                 }
@@ -257,17 +372,26 @@ struct GameView: View {
                 .padding(.horizontal, 24)
                 .transition(.opacity.combined(with: .scale))
                 .animation(.easeInOut(duration: 0.2), value: sdShowOverlay)
+                // Allow dismiss by tap (only after result is shown, and lingered a bit)
+                .onTapGesture {
+                    guard !sdRolling else { return }
+                    let minHold: TimeInterval = 1.0
+                    let lingered = (sdRevealAt.map { Date().timeIntervalSince($0) } ?? 0) >= minHold
+                    if sdHasRevealed && lingered {
+                        sdShowOverlay = false
+                    }
+                }
             }
         }
         .onAppear {
             wroteOutcome = false
-            // Capture the *pre-payout* pot (engine will zero it after payout)
+            // Capture current pot; we’ll keep the *max* pot as doubles happen
             startingPotCents = engine.state.potCents
 
             let b = BotController(bind: engine)
             botCtl = b
             scheduleTurnTimer()
-            b.scheduleBotIfNeeded()
+            if !inAwaitDouble { b.scheduleBotIfNeeded() }
         }
         .onDisappear {
             turnTimer?.invalidate(); turnTimer = nil
@@ -281,20 +405,20 @@ struct GameView: View {
         .onChangeCompat(engine.state.turnIdx) { _, _ in
             picked.removeAll()
             scheduleTurnTimer()
-            botCtl?.scheduleBotIfNeeded()
+            if !inAwaitDouble { botCtl?.scheduleBotIfNeeded() }
         }
         // When dice appear (after empty) trigger wiggle — works for bots too
         .onChangeCompat(engine.state.lastFaces) { oldFaces, newFaces in
-            botCtl?.scheduleBotIfNeeded()
+            if !inAwaitDouble { botCtl?.scheduleBotIfNeeded() }
             if oldFaces.isEmpty && !newFaces.isEmpty {
                 withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
             }
         }
-        // Keep a stable record of the original pot (first non-zero we see)
-        .onChangeCompat(engine.state.potCents) { oldVal, newVal in
-            if startingPotCents == 0, newVal > 0 { startingPotCents = newVal }
+        // Keep a running *max* of the pot so Game Over shows the doubled amount
+        .onChangeCompat(engine.state.potCents) { _, newVal in
+            if newVal > startingPotCents { startingPotCents = newVal }
         }
-        // Write leaderboard exactly once when the game reaches .finished
+        // Phase transitions: write outcome, and stop timers while awaiting decision
         .onChangeCompat(engine.state.phase) { _, newPhase in
             if newPhase == .finished {
                 writeOutcomeIfNeeded()
@@ -302,38 +426,80 @@ struct GameView: View {
                 // Any non-finished phase resets the guard for the next game
                 wroteOutcome = false
             }
+            if newPhase == .awaitDouble {
+                // Halt timers/bots so we don't re-enter SD or auto-advance
+                turnTimer?.invalidate(); turnTimer = nil
+            }
         }
     }
 
-    // MARK: - Sudden Death animation driver
+    // MARK: - Sudden Death animation driver (multi-way)
     private func startSuddenDeathAnimationAndResolve() {
+        // Prevent post-resolution re-entry and mid-animation retrigger
+        guard engine.state.phase == .suddenDeath else { return }
+        guard !sdShowOverlay && !sdRolling else { return }
+
+        // Tunables
+        let spinDuration: TimeInterval = 1.25   // longer spin to build suspense
+        let revealDelay: TimeInterval = 0.12    // small beat so SwiftUI publishes faces
+
         // Prepare overlay
+        sdHasRevealed = false
+        sdRevealAt = nil
+        sdResultFacesSnap = [:]
+        sdResultOrderSnap = []
         sdShowOverlay = true
         sdRolling = true
         withAnimation(.easeOut(duration: 0.2)) { rollShake &+= 1 }
 
+        // Initialize anim faces for current contenders
+        if let contenders = engine.state.suddenContenders {
+            for idx in contenders { sdAnimFaces[idx] = Int.random(in: 1...6) }
+        }
+
         // Spin the dice faces rapidly until we reveal the true result
         stopSuddenDeathRollTimer()
         sdRollTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { _ in
-            sdUserAnimFace = Int.random(in: 1...6)
-            sdBotAnimFace = Int.random(in: 1...6)
+            if let contenders = engine.state.suddenContenders {
+                for idx in contenders { sdAnimFaces[idx] = Int.random(in: 1...6) }
+            }
         }
         if let t = sdRollTimer { RunLoop.main.add(t, forMode: .common) }
 
-        // After a short delay, resolve in the engine and reveal the result
+        // Resolve, then reveal after a short pause so faces are definitely in state
         let impact = UIImpactFeedbackGenerator(style: .heavy)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            _ = engine.resolveSuddenDeathRoll()
+        DispatchQueue.main.asyncAfter(deadline: .now() + spinDuration) {
+            _ = engine.rollSuddenDeath()
             impact.impactOccurred()
 
-            // Stop rolling visuals and show the actual faces for a beat
             stopSuddenDeathRollTimer()
-            sdRolling = false
 
-            // Let the user see the result before transitioning to Game Over
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    sdShowOverlay = false
+            // Give SwiftUI a brief beat to publish suddenRolls, then show the result
+            DispatchQueue.main.asyncAfter(deadline: .now() + revealDelay) {
+                // SNAPSHOT the faces right now (before engine potentially advances again)
+                if let liveRolls = engine.state.suddenRolls {
+                    sdResultFacesSnap = liveRolls
+                    if let liveOrder = engine.state.suddenContenders {
+                        sdResultOrderSnap = liveOrder
+                    } else {
+                        // fallback: stable order from keys
+                        sdResultOrderSnap = Array(liveRolls.keys).sorted()
+                    }
+                } else if let liveOrder = engine.state.suddenContenders {
+                    // If rolls somehow nil, snapshot anim faces so UI still shows something
+                    sdResultFacesSnap = Dictionary(uniqueKeysWithValues: liveOrder.map { ($0, sdAnimFaces[$0] ?? 1) })
+                    sdResultOrderSnap = liveOrder
+                }
+
+                sdRolling = false
+                sdHasRevealed = true
+                sdRevealAt = Date()
+
+                // If the engine already moved on (winner decided), gently auto-dismiss
+                if engine.state.phase != .suddenDeath {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        withAnimation(.easeOut(duration: 0.3)) { sdShowOverlay = false }
+                    }
                 }
             }
         }
@@ -360,7 +526,7 @@ struct GameView: View {
             .filter { $0.offset != winnerIdx }
             .map { $0.element.display }
 
-        // Record the match with the *original* pot (pre-payout)
+        // Record the match with the *final (possibly doubled)* pot we tracked
         leaders.recordMatch(
             winnerName: winnerDisplay,
             loserNames: losers,
@@ -388,7 +554,7 @@ struct GameView: View {
     private func scheduleTurnTimer() {
         turnTimer?.invalidate()
         timeLeft = 300
-        guard !isFinished else { return }
+        guard !isFinished && !isSuddenDeath && !inAwaitDouble else { return }
         turnTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
             timeLeft -= 1
             if timeLeft <= 0 {
@@ -408,6 +574,21 @@ struct GameView: View {
         let sign = cents < 0 ? "-" : ""
         let absVal = abs(cents)
         return "\(sign)$\(absVal/100).\(String(format: "%02d", absVal % 100))"
+    }
+
+    // Double-or-Nothing labels
+    private var doubleHeadline: String {
+        if let w = engine.state.winnerIdx,
+           engine.state.players.indices.contains(w) {
+            let name = engine.state.players[w].display
+            return "\(name) is ahead. Double or Nothing?"
+        }
+        return "Double or Nothing?"
+    }
+
+    private var doubleButtonTitle: String {
+        let n = engine.state.doubleCount
+        return n == 0 ? "Double the Pot" : "Double Again (x\(n + 1))"
     }
 }
 

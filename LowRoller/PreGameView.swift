@@ -2,15 +2,16 @@
 import SwiftUI
 import UIKit
 import Foundation
+import UniformTypeIdentifiers
 
-// File-scoped so nested views (e.g., SeatRow) can use it
+// MARK: - Helper
 fileprivate func randomProWagerCents() -> Int {
     // $15–$85 in $5 steps → 15,20,...,85 (in cents)
     (Int.random(in: 3...17) * 5) * 100
 }
 
+// MARK: - Main Lobby View
 struct PreGameView: View {
-    // passed from App
     @State var youName: String
     let start: (_ engine: GameEngine) -> Void
 
@@ -18,14 +19,14 @@ struct PreGameView: View {
     @StateObject private var leaders = LeaderboardStore()
     @State private var metric: LeaderMetric = .dollars
 
-    // lobby state
+    // Lobby state
     @FocusState private var focusName: Bool
     @State private var youStart = false
     @State private var count = 2
     @State private var yourWagerCents = 500
     @State private var seats: [SeatCfg]
 
-    // For leaderboard confirm delete / reset
+    // Leaderboard actions
     @State private var pendingDelete: LeaderEntry?
     @State private var pendingReset: LeaderEntry?
 
@@ -38,39 +39,35 @@ struct PreGameView: View {
     init(youName: String, start: @escaping (_ engine: GameEngine) -> Void) {
         self.start = start
         _youName = State(initialValue: youName)
+        _seats = State(initialValue: PreGameView.seedSeats())
+    }
 
-        var taken = Set<UUID>() // ensure unique bot identities across seats
-
-        let initialSeats: [SeatCfg] = (2...8).map { i in
+    private static func seedSeats() -> [SeatCfg] {
+        var taken = Set<UUID>()
+        var result: [SeatCfg] = []
+        for i in 2...8 {
             var cfg = SeatCfg(
-                isBot: true,                                 // default seats as bots
-                botLevel: i == 2 ? .pro : .amateur,          // seat 2 starts Pro by default
+                isBot: true,
+                botLevel: (i == 2) ? .pro : .amateur,
                 name: "",
                 botId: nil,
                 showPicker: false,
-                wagerCents: 500                              // default amateur wager
+                wagerCents: 500
             )
-
             if cfg.isBot {
-                // Assign a random identity now so UI shows a real name
                 let pick = BotRoster.random(level: cfg.botLevel, avoiding: taken)
                 cfg.botId = pick.id
                 cfg.name  = pick.name
                 taken.insert(pick.id)
-
-                // If Pro, set the random $15–$85 default wager (in $5 steps)
                 if cfg.botLevel == .pro {
                     cfg.wagerCents = randomProWagerCents()
                 }
             }
-
-            return cfg
+            result.append(cfg)
         }
-
-        _seats = State(initialValue: initialSeats)
+        return result
     }
 
-    // Track all bot IDs currently used so randoms stay unique
     private var usedBotIds: Set<UUID> {
         Set(seats.compactMap { $0.botId })
     }
@@ -79,11 +76,12 @@ struct PreGameView: View {
         yourWagerCents + seats.prefix(count - 1).map(\.wagerCents).reduce(0, +)
     }
 
+    // MARK: - Body
     var body: some View {
         NavigationStack {
             List {
-                // --- You ---
-                Section("You") {
+                // --- YOU ---
+                Section {
                     TextField("Your name", text: $youName)
                         .focused($focusName)
                         .textInputAutocapitalization(.words)
@@ -94,43 +92,38 @@ struct PreGameView: View {
                     }
 
                     Toggle("You start (random if off)", isOn: $youStart)
+                } header: {
+                    Text("You")
                 }
 
-                // --- Players ---
-                Section("Players (\(count))") {
-                    Stepper(value: $count, in: 2...8) { Text("Count: \(count)") }
+                // --- PLAYERS ---
+                Section {
+                    Stepper(value: $count, in: 2...8) {
+                        Text("Count: \(count)")
+                    }
 
                     ForEach(Array(seats.prefix(count - 1).indices), id: \.self) { i in
                         SeatRow(
                             seat: $seats[i],
                             usedBotIds: usedBotIds,
-
-                            // Return the picked identity so the row can update its UI immediately
                             onSurpriseMe: { assignRandomBotReturning(forIndex: i, preferUnique: true) },
-
                             onPick: { bot in
                                 seats[i].botId = bot.id
                                 seats[i].name  = bot.name
                             },
-
-                            // Pass the level down, pick at parent (for uniqueness), return the identity
                             onLevelChange: { newLevel in
                                 let pick = assignRandomBotReturning(forIndex: i, to: newLevel, preferUnique: true)
-                                // If switching to Pro, give the random default wager immediately
                                 if newLevel == .pro {
                                     seats[i].wagerCents = randomProWagerCents()
                                 }
                                 return pick
                             },
-
                             onToggleBot: { isOn in
                                 if isOn {
                                     let pick = assignRandomBotReturning(forIndex: i, preferUnique: true)
-                                    // If this seat is Pro already, apply the random default wager
                                     if seats[i].botLevel == .pro {
                                         seats[i].wagerCents = randomProWagerCents()
                                     }
-                                    // Ensure UI reflects identity immediately
                                     seats[i].botId = pick.id
                                     seats[i].name  = pick.name
                                 } else {
@@ -140,17 +133,15 @@ struct PreGameView: View {
                             }
                         )
                     }
+                } header: {
+                    Text("Players (\(count))")
                 }
 
-                // --- Start (Pot + Button as a single row) ---
+                // --- POT & START BUTTON ---
                 Section {
                     VStack(spacing: 12) {
-                        PotPreviewCard(
-                            potCents: potPreview,
-                            playerCount: count
-                        )
-                        .padding(.horizontal, 20) // match button edge
-
+                        PotPreviewCard(potCents: potPreview, playerCount: count)
+                            .padding(.horizontal, 20)
                         Button {
                             focusName = false
                             UIApplication.shared.endEditing()
@@ -170,7 +161,7 @@ struct PreGameView: View {
                                         id: UUID(),
                                         display: s.name.isEmpty
                                             ? (s.botLevel == .pro ? "Pro Bot" : "Amateur Bot")
-                                            : s.name, // pun name if chosen/assigned
+                                            : s.name,
                                         isBot: true,
                                         botLevel: s.botLevel,
                                         wagerCents: s.wagerCents
@@ -186,38 +177,33 @@ struct PreGameView: View {
                                 }
                             }
 
-                            // Pass the same leaderboard store so bankrolls hydrate properly
                             let engine = GameEngine(players: players, youStart: youStart, leaders: leaders)
                             start(engine)
                         } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: "play.fill")
-                                    .font(.headline.weight(.bold))
-                                Text("Start Game")
-                                    .font(.headline.weight(.semibold))
+                                Text("Start Game").font(.headline.weight(.semibold))
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
                             .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                RoundedRectangle(cornerRadius: 16)
                                     .fill(.ultraThinMaterial)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 16)
                                             .strokeBorder(Color.white.opacity(0.3), lineWidth: 1)
                                     )
-                                    .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 3)
                             )
                             .foregroundStyle(.white)
                         }
                         .padding(.horizontal, 20)
                     }
-                    // Make the whole pot+button group a single, edge-to-edge row
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                 }
 
-                // --- All-Time Leaderboard (Top 10) ---
+                // --- LEADERBOARD ---
                 Section {
                     Picker("Rank by", selection: $metric) {
                         ForEach(LeaderMetric.allCases) { m in
@@ -230,35 +216,30 @@ struct PreGameView: View {
                     if top.isEmpty {
                         Text("No results yet. Play a game to start the board!")
                             .foregroundStyle(.secondary)
-                            .padding(.vertical, 8)
                     } else {
                         ForEach(Array(top.enumerated()), id: \.element.id) { (i, e) in
                             LeaderRow(rank: i + 1, entry: e, metric: metric)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    // Reset Balance
-                                    Button {
-                                        pendingReset = e
-                                    } label: {
-                                        Label("Reset Balance", systemImage: "arrow.counterclockwise")
-                                    }
-                                    .tint(.orange)
-
-                                    // Remove
+                                .swipeActions {
                                     Button(role: .destructive) {
                                         pendingDelete = e
                                     } label: {
                                         Label("Remove", systemImage: "trash")
                                     }
+                                    Button {
+                                        pendingReset = e
+                                    } label: {
+                                        Label("Reset Balance", systemImage: "arrow.counterclockwise")
+                                    }.tint(.orange)
                                 }
                         }
                     }
                 } header: {
                     Text("All-Time Leaderboard")
                 } footer: {
-                    Text("Swipe left on a row to reset a bankroll or remove a player from the board.")
+                    Text("Swipe left to reset or remove a player.")
                 }
 
-                // --- About (Bottom) ---
+                // --- ABOUT ---
                 Section {
                     Button {
                         showAbout = true
@@ -267,37 +248,23 @@ struct PreGameView: View {
                             .fontWeight(.semibold)
                     }
                 }
-            } // <-- close List
+            }
             .listStyle(.insetGrouped)
             .navigationTitle("Low Roller")
             .scrollDismissesKeyboard(.interactively)
-
-            // Delete confirm
-            .alert(
-                "Remove \(pendingDelete?.name ?? "player")?",
-                isPresented: Binding(
-                    get: { pendingDelete != nil },
-                    set: { if !$0 { pendingDelete = nil } }
-                )
+            .alert("Remove \(pendingDelete?.name ?? "player")?", isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } })
             ) {
                 Button("Cancel", role: .cancel) { pendingDelete = nil }
                 Button("Remove", role: .destructive) {
-                    if let id = pendingDelete?.id {
-                        leaders.removeEntry(id: id)
-                    }
+                    if let id = pendingDelete?.id { leaders.removeEntry(id: id) }
                     pendingDelete = nil
                 }
-            } message: {
-                Text("This will remove them from all leaderboard views.")
             }
-
-            // Reset balance confirm
-            .alert(
-                "Reset \(pendingReset?.name ?? "player") balance?",
-                isPresented: Binding(
-                    get: { pendingReset != nil },
-                    set: { if !$0 { pendingReset = nil } }
-                )
+            .alert("Reset \(pendingReset?.name ?? "player") balance?", isPresented: Binding(
+                get: { pendingReset != nil },
+                set: { if !$0 { pendingReset = nil } })
             ) {
                 Button("Cancel", role: .cancel) { pendingReset = nil }
                 Button("Reset") {
@@ -307,7 +274,7 @@ struct PreGameView: View {
                     pendingReset = nil
                 }
             } message: {
-                Text("Sets their bankroll back to $\(startingBankroll/100). Wins and streaks remain unchanged.")
+                Text("Resets their bankroll to $\(startingBankroll/100). Wins and streaks remain unchanged.")
             }
             .sheet(isPresented: $showAbout) {
                 AboutSheet()
@@ -315,11 +282,11 @@ struct PreGameView: View {
         }
     }
 
-    // MARK: - Helpers (now return the chosen identity)
+    // MARK: - Helpers
     @discardableResult
     private func assignRandomBotReturning(forIndex i: Int, to level: AIBotLevel, preferUnique: Bool = true) -> BotIdentity {
         var avoid = usedBotIds
-        if let currentId = seats[i].botId { avoid.remove(currentId) } // allow this seat to change
+        if let currentId = seats[i].botId { avoid.remove(currentId) }
         let pick = BotRoster.random(level: level, avoiding: preferUnique ? avoid : [])
         seats[i].botLevel = level
         seats[i].botId    = pick.id
@@ -333,7 +300,7 @@ struct PreGameView: View {
     }
 }
 
-// MARK: - SeatRow (sheet-based opponent picker; no context-menu warnings)
+// MARK: - SeatRow
 private struct SeatRow: View {
     @Binding var seat: SeatCfg
     let usedBotIds: Set<UUID>
@@ -365,9 +332,9 @@ private struct SeatRow: View {
             if seat.isBot {
                 Picker("Level", selection: Binding(
                     get: { seat.botLevel },
-                    set: { newLevel in
-                        seat.botLevel = newLevel
-                        let pick = onLevelChange(newLevel)
+                    set: { newValue in
+                        seat.botLevel = newValue
+                        let pick = onLevelChange(newValue)
                         seat.botId = pick.id
                         seat.name  = pick.name
                     }
@@ -376,26 +343,18 @@ private struct SeatRow: View {
                     Text("Pro").tag(AIBotLevel.pro)
                 }
                 .pickerStyle(.segmented)
-                .onChange(of: seat.botLevel) { oldValue, newValue in
-                    guard seat.isBot else { return }
-                    if newValue == .pro {
-                        seat.wagerCents = randomProWagerCents()
-                    }
-                }
 
                 Button {
                     showOpponentPicker = true
                 } label: {
-                    HStack(spacing: 8) {
+                    HStack {
                         Image(systemName: "person.crop.circle")
                         Text(seat.name.isEmpty ? "Choose Opponent…" : seat.name)
                             .fontWeight(.semibold)
                         Spacer()
                         Image(systemName: "chevron.up.chevron.down")
-                            .imageScale(.small)
                             .foregroundStyle(.secondary)
                     }
-                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .sheet(isPresented: $showOpponentPicker) {
@@ -434,7 +393,7 @@ private struct SeatRow: View {
     }
 }
 
-// MARK: - OpponentPickerView (sheet content)
+// MARK: - OpponentPickerView
 private struct OpponentPickerView: View {
     let level: AIBotLevel
     let onPick: (BotIdentity) -> Void
@@ -446,61 +405,70 @@ private struct OpponentPickerView: View {
         NavigationStack {
             List {
                 Section {
-                    Button {
-                        onSurprise()
-                    } label: {
+                    Button { onSurprise() } label: {
                         Label("Surprise me", systemImage: "sparkles")
                     }
+                } header: {
+                    Text("Actions")
                 }
 
-                Section("Opponents") {
+                Section {
                     ForEach(BotRoster.all(for: level)) { bot in
                         Button {
                             onPick(bot)
                         } label: {
                             HStack {
-                                Image(systemName: "person.fill")
-                                    .foregroundStyle(.secondary)
+                                Image(systemName: "person.fill").foregroundStyle(.secondary)
                                 Text(bot.name)
                                 Spacer()
                             }
                         }
                     }
+                } header: {
+                    Text("Opponents")
                 }
             }
             .navigationTitle("Choose Opponent")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
+                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
         }
     }
 }
 
-// MARK: - AboutSheet
+// MARK: - AboutSheet (Top-level exporter owner)
 private struct AboutSheet: View {
     enum Tab: String, CaseIterable, Identifiable {
         case rules = "Rules"
         case about = "About"
+        case settings = "Settings"
         var id: String { rawValue }
     }
 
     @Environment(\.dismiss) private var dismiss
     @State private var tab: Tab = .rules
 
+    // URL-based export (no big Data blobs)
+    @State private var exportURL: URL? = nil
+    @State private var exportFilename: String = "events.json"
+    @State private var showExporter = false
+
+    @AppStorage("analytics.enabled.v1") private var analyticsOn: Bool = true
+
     private var appVersion: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
         let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
-        return [v, b].compactMap { $0 }.joined(separator: " (\(Bundle.main.displayName)) build ")
-            .isEmpty ? "—" : "\(v ?? "—") (\(b ?? "—"))"
+        if let v, let b { return "\(v) (\(b))" }
+        if let v { return v }
+        if let b { return "(\(b))" }
+        return "—"
     }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
+            VStack {
                 Picker("", selection: $tab) {
-                    ForEach(Tab.allCases) { t in Text(t.rawValue).tag(t) }
+                    ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .padding()
@@ -510,88 +478,110 @@ private struct AboutSheet: View {
                     case .rules:
                         ScrollView {
                             VStack(alignment: .leading, spacing: 12) {
-                                Text("How to Play")
-                                    .font(.title3).bold()
+                                Text("How to Play").font(.title3).bold()
                                 Text("""
-                                • Each player begins with 7 dice and has to ante into the **Pot** at the start.
-                                • Turns proceed clockwise. On your turn, tap **Roll**.
-                                • After each roll, players must set aside _at least_ one die and as many as all the dice on the board.
-                                • The lowest total after rolling all dice wins the pot.
-                                • KEY! 3s count as 0 :)
-                                • **Ties** trigger **Sudden Death**: tied players roll again until one player wins.
+                                • Each player antes into the **Pot**.
+                                • On your turn, tap **Roll** and set aside at least one die.
+                                • 3s count as zero. Lowest total wins the pot.
+                                • **Ties:** play **Sudden Death** rolls until one wins.
                                 """)
-                                .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .padding()
+                            }.padding()
                         }
-
                     case .about:
                         ScrollView {
                             VStack(alignment: .leading, spacing: 14) {
                                 HStack(spacing: 12) {
-                                    Image(systemName: "dice.fill")
-                                        .imageScale(.large)
-                                    Text("Low Roller")
-                                        .font(.title3).bold()
+                                    Image(systemName: "dice.fill").imageScale(.large)
+                                    Text("Low Roller").font(.title3).bold()
                                     Spacer()
                                 }
-
                                 if appVersion != "—" {
                                     Text("Version: \(appVersion)")
                                         .font(.footnote)
                                         .foregroundStyle(.secondary)
                                 }
-
-                                Text("""
-                                A minimalist dice game with buttery-smooth SwiftUI animations, playful bots, and a persistent leaderboard.
-                                Built by Thomas Plummer.
-                                """)
-                                .fixedSize(horizontal: false, vertical: true)
-
+                                Text("A minimalist dice game built in SwiftUI by Thomas Plummer.")
                                 Divider()
+                                Link("GitHub Repository", destination: URL(string: "https://github.com/therealtplum/low-roller")!)
+                                Link("Developer (@therealtplum)", destination: URL(string: "https://github.com/therealtplum")!)
+                            }.padding()
+                        }
+                    case .settings:
+                        NavigationStack {
+                            List {
+                                Section {
+                                    Toggle(isOn: $analyticsOn) {
+                                        VStack(alignment: .leading) {
+                                            Text("Enable Analytics")
+                                            Text("Write lightweight JSONL event logs on-device.")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .onChange(of: analyticsOn) { _, newVal in
+                                        AnalyticsSwitch.enabled = newVal
+                                    }
 
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("Links").font(.headline)
-                                    Link("GitHub Repository", destination: URL(string: "https://github.com/therealtplum/low-roller")!)
-                                    Link("Developer on GitHub (@therealtplum)", destination: URL(string: "https://github.com/therealtplum")!)
+                                    NavigationLink("Export Event Logs") {
+                                        AnalyticsExportView { url, filename in
+                                            exportURL = url
+                                            exportFilename = filename
+                                            showExporter = true
+                                        }
+                                    }
+                                } header: {
+                                    Text("Analytics")
+                                } footer: {
+                                    Text("Each line is one JSON event (JSONL). Export as .json for compatibility.")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
                                 }
-
-                                Spacer(minLength: 8)
                             }
-                            .padding()
+                            .onAppear { AnalyticsSwitch.enabled = analyticsOn }
                         }
                     }
                 }
             }
             .navigationTitle("About")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
         }
         .presentationDetents([.medium, .large])
+        // Exporter that reads directly from disk via FileWrapper(url:)
+        .fileExporter(
+            isPresented: $showExporter,
+            document: exportURL.map { URLExportDoc(url: $0) },
+            contentType: .plainText,                 // <- prevents preview work
+            defaultFilename: exportFilename
+        ) { result in
+            if case .failure(let err) = result {
+                print("Export failed: \(err.localizedDescription)")
+            }
+        }
     }
 }
 
-private extension Bundle {
-    var displayName: String {
-        object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ??
-        object(forInfoDictionaryKey: "CFBundleName") as? String ?? "App"
+// MARK: - URL-backed FileDocument (no in-memory Data blob)
+struct URLExportDoc: FileDocument {
+    static var readableContentTypes: [UTType] { [.plainText] }
+    let url: URL
+    init(url: URL) { self.url = url }
+    init(configuration: ReadConfiguration) throws {
+        self.url = FileManager.default.temporaryDirectory.appendingPathComponent("noop.txt")
+    }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        try FileWrapper(url: url, options: [.withoutMapping, .immediate])
     }
 }
 
-// MARK: - PotPreviewCard
+// MARK: - PotPreviewCard (ensure it's in scope)
 private struct PotPreviewCard: View {
     let potCents: Int
     let playerCount: Int
 
     @State private var pulse = false
-    @State private var lastPotCents = 0
 
     var body: some View {
         ZStack {
-            // Gradient base
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(
                     LinearGradient(
@@ -601,34 +591,19 @@ private struct PotPreviewCard: View {
                     )
                 )
                 .overlay(
-                    // Subtle glossy overlay
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .fill(.ultraThinMaterial)
                         .opacity(0.25)
                 )
                 .overlay(
-                    // Neon stroke that breathes when pot changes
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    pulse ? .white.opacity(0.9) : .white.opacity(0.25),
-                                    .white.opacity(0.05),
-                                    pulse ? .white.opacity(0.6) : .white.opacity(0.15)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 2
-                        )
+                        .stroke(.white.opacity(pulse ? 0.6 : 0.2), lineWidth: 2)
                         .shadow(radius: pulse ? 14 : 6)
                         .animation(.easeInOut(duration: 0.6), value: pulse)
                 )
                 .shadow(color: .black.opacity(0.2), radius: 18, x: 0, y: 10)
 
-            // Content
             HStack(spacing: 16) {
-                // Left: Symbols stack
                 VStack(spacing: 10) {
                     Image(systemName: "die.face.5.fill")
                         .font(.system(size: 34, weight: .bold))
@@ -641,7 +616,6 @@ private struct PotPreviewCard: View {
                 }
                 .padding(.leading, 6)
 
-                // Right: Text
                 VStack(alignment: .leading, spacing: 6) {
                     Text("POT")
                         .font(.caption)
@@ -649,17 +623,12 @@ private struct PotPreviewCard: View {
                         .foregroundStyle(.white.opacity(0.85))
                         .tracking(2)
 
-                    // Big dollar amount
                     Text(formatCents(potCents))
-#if compiler(>=5.9)
-                        .contentTransition(.numericText())
-#endif
                         .font(.system(size: 42, weight: .heavy, design: .rounded))
                         .foregroundStyle(.white)
                         .minimumScaleFactor(0.6)
                         .lineLimit(1)
 
-                    // Subline: players + avg
                     HStack(spacing: 10) {
                         Label("\(playerCount) players", systemImage: "person.3.fill")
                     }
@@ -674,15 +643,11 @@ private struct PotPreviewCard: View {
         }
         .frame(maxWidth: .infinity, minHeight: 110)
         .padding(.horizontal, 16)
-        .onAppear { lastPotCents = potCents }
-        .onChange(of: potCents) { oldValue, newValue in
-            if newValue != oldValue {
-                // Pulse + light haptic on change
-                UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { pulse = true }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                    withAnimation(.easeOut(duration: 0.3)) { pulse = false }
-                }
+        .onChange(of: potCents) { _, _ in
+            UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { pulse = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                withAnimation(.easeOut(duration: 0.3)) { pulse = false }
             }
         }
         .accessibilityElement(children: .ignore)
@@ -702,11 +667,4 @@ private let _currencyFormatter: NumberFormatter = {
 private func formatCents(_ cents: Int) -> String {
     let dollars = Double(cents) / 100.0
     return _currencyFormatter.string(from: NSNumber(value: round(dollars))) ?? "$\(Int(round(dollars)))"
-}
-
-// If you don’t already have this helper elsewhere:
-extension UIApplication {
-    func endEditing() {
-        sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-    }
 }

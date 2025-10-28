@@ -73,7 +73,8 @@ struct PreGameView: View {
     }
 
     var potPreview: Int {
-        yourWagerCents + seats.prefix(count - 1).map(\.wagerCents).reduce(0, +)
+        let others = seats.prefix(max(0, count - 1)).map(\.wagerCents).reduce(0, +)
+        return yourWagerCents + others
     }
 
     // MARK: - Body
@@ -102,7 +103,10 @@ struct PreGameView: View {
                         Text("Count: \(count)")
                     }
 
-                    ForEach(Array(seats.prefix(count - 1).indices), id: \.self) { i in
+                    // Break up complex generics so the compiler is happy
+                    let seatsToShow = Array(seats.prefix(max(0, count - 1)))
+                    ForEach(Array(seatsToShow.enumerated()), id: \.offset) { pair in
+                        let i = pair.offset
                         SeatRow(
                             seat: $seats[i],
                             usedBotIds: usedBotIds,
@@ -155,7 +159,7 @@ struct PreGameView: View {
                                 wagerCents: yourWagerCents
                             ))
 
-                            for s in seats.prefix(count - 1) {
+                            for s in seats.prefix(max(0, count - 1)) {
                                 if s.isBot {
                                     players.append(Player(
                                         id: UUID(),
@@ -301,7 +305,7 @@ struct PreGameView: View {
 }
 
 // MARK: - SeatRow
-private struct SeatRow: View {
+struct SeatRow: View {
     @Binding var seat: SeatCfg
     let usedBotIds: Set<UUID>
     let onSurpriseMe: () -> BotIdentity
@@ -436,12 +440,14 @@ private struct OpponentPickerView: View {
     }
 }
 
-// MARK: - AboutSheet (Top-level exporter owner)
+// MARK: - AboutSheet (Settings hidden in Release)
 private struct AboutSheet: View {
     enum Tab: String, CaseIterable, Identifiable {
         case rules = "Rules"
         case about = "About"
+        #if DEBUG
         case settings = "Settings"
+        #endif
         var id: String { rawValue }
     }
 
@@ -506,6 +512,7 @@ private struct AboutSheet: View {
                                 Link("Developer (@therealtplum)", destination: URL(string: "https://github.com/therealtplum")!)
                             }.padding()
                         }
+                    #if DEBUG
                     case .settings:
                         NavigationStack {
                             List {
@@ -539,6 +546,7 @@ private struct AboutSheet: View {
                             }
                             .onAppear { AnalyticsSwitch.enabled = analyticsOn }
                         }
+                    #endif
                     }
                 }
             }
@@ -574,7 +582,7 @@ struct URLExportDoc: FileDocument {
 }
 
 // MARK: - PotPreviewCard (ensure it's in scope)
-private struct PotPreviewCard: View {
+struct PotPreviewCard: View {
     let potCents: Int
     let playerCount: Int
 

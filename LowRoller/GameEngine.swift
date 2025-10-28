@@ -1,6 +1,7 @@
 //
 //  GameEngine.swift
 //  LowRoller
+//  FINAL VERSION - Fixed unused variable warnings
 //
 
 import Foundation
@@ -32,7 +33,7 @@ final class GameEngine: ObservableObject {
             }
         }
 
-        // Start game with empty pot — we’ll build it next
+        // Start game with empty pot — we'll build it next
         var s = GameState(players: hydrated, potCents: 0)
         s.turnIdx = youStart ? 0 : Int.random(in: 0..<hydrated.count, using: &rng)
 
@@ -85,7 +86,11 @@ final class GameEngine: ObservableObject {
 
     /// Should we offer Double-or-Nothing *now*?
     /// Rule: only 1v1, exactly one human, and that human **lost** this round.
+    /// NEW: Also check that we haven't already done a double-or-nothing this match.
     private func shouldOfferDoubleNow() -> Bool {
+        // NEW: Only allow one double-or-nothing per match
+        guard state.doubleCount == 0 else { return false }
+        
         guard state.players.count == 2, let w = state.winnerIdx else { return false }
         let p0Human = !state.players[0].isBot
         let p1Human = !state.players[1].isBot
@@ -115,8 +120,18 @@ final class GameEngine: ObservableObject {
 
             if state.players[idx].bankrollCents < 0 {
                 // Borrow penalty if player is already negative
-                let penalty = Int(Double(base) * 0.20)
-                state.players[idx].bankrollCents -= (base + penalty)
+                // Use proper rounding instead of truncation
+                let penalty = Int((Double(base) * 0.20).rounded())
+                
+                // Check for integer overflow before applying
+                let totalDebit = base + penalty
+                if state.players[idx].bankrollCents < Int.min + totalDebit {
+                    // Would overflow - cap at Int.min
+                    state.players[idx].bankrollCents = Int.min
+                } else {
+                    state.players[idx].bankrollCents -= totalDebit
+                }
+                
                 economy.recordBorrowPenalty(penalty)
             } else {
                 state.players[idx].bankrollCents -= base
@@ -140,23 +155,37 @@ final class GameEngine: ObservableObject {
         else { return }
 
         let pot = state.potCents
-        state.players[wIdx].bankrollCents += pot
+        
+        // Check for integer overflow before crediting
+        if state.players[wIdx].bankrollCents > Int.max - pot {
+            state.players[wIdx].bankrollCents = Int.max
+        } else {
+            state.players[wIdx].bankrollCents += pot
+        }
+        
         state.potCents = 0 // prevent double payout
     }
 
     /// Finalize, log, pay, and notify — call only when the match *really* ends.
     private func finalizeAndNotify() {
+        // Set phase first to prevent race conditions
         state.phase = .finished
+        
+        // Pay winner before notifications
         payWinnerIfNeeded()
 
         if let mid = state.analyticsMatchId, let wIdx = state.winnerIdx {
             let balances = state.players.map(\.bankrollCents)
             Log.matchEnded(matchId: mid,
                            winnerIdx: wIdx,
-                           potCents: state.potCents,
+                           potCents: 0,  // Already paid out, so 0
                            balancesCents: balances)
+            
+            // Ensure UI has time to update before notification
             let humanWon = !state.players[wIdx].isBot
-            NotificationCenter.default.post(name: .humanWonMatch, object: humanWon)
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .humanWonMatch, object: humanWon)
+            }
         }
     }
 
@@ -234,7 +263,16 @@ final class GameEngine: ObservableObject {
 
     /// Enter sudden-death with the specified contenders (player indices).
     private func startSuddenDeath(with contenders: [Int]) {
-        guard contenders.count >= 2 else { return }
+        // Handle edge cases properly
+        guard contenders.count >= 2 else {
+            // If somehow we get here with 0 or 1 contender, declare them the winner
+            if contenders.count == 1 {
+                state.winnerIdx = contenders[0]
+                finalizeAndNotify()
+            }
+            return
+        }
+        
         state.phase = .suddenDeath
         state.suddenRound &+= 1
         // Preserve stable order for UI
@@ -286,14 +324,16 @@ final class GameEngine: ObservableObject {
                 finalizeAndNotify()
             }
 
-            // Clear SD working sets
+            // Clear ALL SD working sets properly
             state.suddenContenders = nil
-            // (Optionally keep last `suddenRolls` for postmortem UI)
+            state.suddenRolls = nil
             state.suddenFaces = SuddenFaces(p0: nil, p1: nil)
             return winner
         } else {
             // Tie at lowest -> runoff only among those tied
+            // This naturally handles any number of players (2, 3, or more)
             state.suddenContenders = lowestPlayers.sorted()
+            state.suddenRound &+= 1  // Increment round for next sudden death
             return nil
         }
     }
@@ -309,7 +349,7 @@ final class GameEngine: ObservableObject {
 
     /// Whether the UI should present the Double-or-Nothing choice *now*.
     func canOfferDoubleOrNothing() -> Bool {
-        // Only when we’re explicitly awaiting and the policy says yes.
+        // Only when we're explicitly awaiting and the policy says yes.
         guard state.phase == .awaitDouble else { return false }
         return shouldOfferDoubleNow()
     }
@@ -339,17 +379,28 @@ final class GameEngine: ObservableObject {
                              picked: [])
         }
 
-        // 1) Escalate the stake without re-debiting bankrolls
-        state.potCents &*= 2
+        // Safe pot doubling with overflow check
+        let (newPot, overflow) = state.potCents.multipliedReportingOverflow(by: 2)
+        if overflow {
+            // Cap at maximum if would overflow
+            state.potCents = Int.max
+        } else {
+            state.potCents = newPot
+        }
+        
         state.doubleCount &+= 1
 
-        // 2) Choose who starts next. Use the *loser* of last round to start.
+        // Better logic for determining next starter that works for any player count
         let nextStarter: Int = {
-            if let w = state.winnerIdx, state.players.count >= 2 { return (w == 0) ? 1 : 0 }
+            // In 2-player games, the loser starts
+            if state.players.count == 2, let w = state.winnerIdx {
+                return (w == 0) ? 1 : 0
+            }
+            // For multi-player games, rotate from current turn
             return (state.turnIdx + 1) % state.players.count
         }()
 
-        // 3) Reset just the round state; keep wagers/bankrolls/pot as-is
+        // Reset just the round state; keep wagers/bankrolls/pot as-is
         state.turnsTaken = 0
         state.lastFaces = []
         state.remainingDice = 7
@@ -363,13 +414,133 @@ final class GameEngine: ObservableObject {
             state.players[i].picks.removeAll(keepingCapacity: true)
         }
 
-        // 4) Resume normal play
+        // Resume normal play
         state.phase = .normal
+    }
+
+    // MARK: - Smarter Bot Strategy
+
+    /// Calculate the minimum score to beat among players who have finished
+    private func getTargetScoreToBeat() -> Int? {
+        // Only consider players who have finished their turns
+        let finishedPlayers = state.players.enumerated().filter { idx, _ in
+            idx < state.turnsTaken
+        }
+        
+        guard !finishedPlayers.isEmpty else { return nil }
+        
+        let scores = finishedPlayers.map { _, player in totalPoints(for: player) }
+        return scores.min()
+    }
+
+    /// Estimate expected score from remaining dice
+    private func expectedScoreFromDice(count: Int) -> Double {
+        // Average die value: (1+2+0+4+5+6)/6 = 3.0 (remember 3 scores as 0)
+        return Double(count) * 3.0
+    }
+
+    /// Smart pick strategy considering game state
+    private func smartPick() {
+        guard !state.lastFaces.isEmpty else { return }
+        
+        let faces = state.lastFaces
+        let currentScore = totalPoints(for: state.players[state.turnIdx])
+        let targetScore = getTargetScoreToBeat()
+        
+        // Group dice by value
+        let threes = faces.enumerated().filter { $0.element == 3 }.map(\.offset)
+        let ones = faces.enumerated().filter { $0.element == 1 }.map(\.offset)
+        let twos = faces.enumerated().filter { $0.element == 2 }.map(\.offset)
+        let fours = faces.enumerated().filter { $0.element == 4 }.map(\.offset)
+        let fives = faces.enumerated().filter { $0.element == 5 }.map(\.offset)
+        let sixes = faces.enumerated().filter { $0.element == 6 }.map(\.offset)
+        
+        // Helper to find single lowest die when no good options exist
+        let pickSingleLowest = {
+            if let lowest = faces.enumerated().min(by: { self.score($0.element) < self.score($1.element) })?.offset {
+                self.pick(indices: [lowest])
+            }
+        }
+        
+        // Strategy depends on whether we need to beat someone
+        if let target = targetScore {
+            // We know what score we need to beat
+            let scoreNeeded = target - currentScore - 1  // -1 because we need to be lower
+            let expectedFromRemaining = expectedScoreFromDice(count: state.remainingDice - faces.count)
+            
+            if scoreNeeded < 0 {
+                // We're already winning, play conservatively
+                // Pick all 3s (best), then pick lowest singles
+                if !threes.isEmpty {
+                    pick(indices: threes)
+                } else if !ones.isEmpty {
+                    pick(indices: [ones[0]])
+                } else if !twos.isEmpty {
+                    pick(indices: [twos[0]])
+                } else if !fours.isEmpty {
+                    pick(indices: [fours[0]])
+                } else if !fives.isEmpty {
+                    pick(indices: [fives[0]])
+                } else if !sixes.isEmpty {
+                    pick(indices: [sixes[0]])
+                } else {
+                    // Fallback - should never reach here but just in case
+                    pickSingleLowest()
+                }
+            } else if Double(scoreNeeded) > expectedFromRemaining {
+                // We need to be aggressive - keep more dice for more rolls
+                // Only pick 3s or single very low values
+                if !threes.isEmpty {
+                    pick(indices: threes)
+                } else if !ones.isEmpty && ones.count > 2 {
+                    // Only pick ones if we have many
+                    pick(indices: ones)
+                } else {
+                    // Pick just one die to keep more chances
+                    pickSingleLowest()
+                }
+            } else {
+                // We're on track - balanced approach
+                if !threes.isEmpty {
+                    pick(indices: threes)
+                } else if !ones.isEmpty && ones.count >= 2 {
+                    pick(indices: ones)
+                } else if !twos.isEmpty && twos.count >= 2 {
+                    pick(indices: twos)
+                } else {
+                    // Pick single lowest (handles 4, 5, 6 cases)
+                    pickSingleLowest()
+                }
+            }
+        } else {
+            // We're going first or everyone else is still playing
+            // Play a balanced strategy - not too aggressive, not too conservative
+            
+            // Always pick all 3s (they're worth 0)
+            if !threes.isEmpty {
+                pick(indices: threes)
+            } else if ones.count >= 2 {
+                // Pick multiple 1s if available
+                pick(indices: ones)
+            } else if twos.count >= 2 {
+                // Pick multiple 2s if available
+                pick(indices: twos)
+            } else if !ones.isEmpty {
+                // Pick single 1
+                pick(indices: [ones[0]])
+            } else if !twos.isEmpty {
+                // Pick single 2
+                pick(indices: [twos[0]])
+            } else {
+                // No low options - pick single lowest (handles 4, 5, 6)
+                pickSingleLowest()
+            }
+        }
     }
 
     // MARK: - Fallback/bot move (used by BotController & timeout)
 
-    // Fallback/bot move: pick all 3s, else single lowest
+    // Updated bot move with smarter strategy
     func fallbackPick() {
         // Don't act if the match is over, we're in Sudden Death, or awaiting Double-or-Nothing
         guard !isFinished,
@@ -378,37 +549,13 @@ final class GameEngine: ObservableObject {
               !state.lastFaces.isEmpty
         else { return }
 
-        let faces = state.lastFaces
-
-        // Prefer setting aside all 3s (they score 0)
-        let threes = faces.enumerated().filter { $0.element == 3 }.map(\.offset)
-        if !threes.isEmpty {
-            if let mid = state.analyticsMatchId {
-                let pickedFaces = threes.map { faces[$0] }
-                Log.decisionMade(matchId: mid,
-                                 playerIdx: state.turnIdx,
-                                 decision: "fallback_pick",
-                                 picked: pickedFaces)
-            }
-            pick(indices: threes)
-            return
-        }
-
-        // Otherwise set aside the single lowest-scoring die
-        if let lowest = faces.enumerated().min(by: { score($0.element) < score($1.element) })?.offset {
-            if let mid = state.analyticsMatchId {
-                Log.decisionMade(matchId: mid,
-                                 playerIdx: state.turnIdx,
-                                 decision: "fallback_pick",
-                                 picked: [faces[lowest]])
-            }
-            pick(indices: [lowest])
-        }
+        // Use smart picking strategy instead of simple fallback
+        smartPick()
     }
 
     // MARK: - Legacy helpers kept for compatibility
 
-    /// Adopt another engine’s state and clear transient round state so the new match is clean.
+    /// Adopt another engine's state and clear transient round state so the new match is clean.
     func adoptAndReset(from other: GameEngine) {
         self.state = other.state
         resetForNewMatch()

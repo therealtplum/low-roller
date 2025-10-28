@@ -2,6 +2,11 @@
 import Foundation
 import Combine   // ✅ Needed for ObservableObject / @Published
 
+// Single source of truth for the House NPC display name
+enum HouseNPC {
+    static let displayName = "🎰 Casino (House)"
+}
+
 // MARK: - Model
 
 struct LeaderEntry: Codable, Identifiable, Equatable {
@@ -151,44 +156,70 @@ final class LeaderboardStore: ObservableObject {
     }
 
     /// Top 10 by metric, with deterministic tie-breakers.
+    /// For `.balance`, inject a synthetic "Casino (House)" row reflecting EconomyStore.shared.houseCents.
     func top10(by metric: LeaderMetric) -> [LeaderEntry] {
+        // Start with the persisted human entries.
+        var list = entries
+
+        // Never keep a stale House row if it ever got persisted by accident.
+        list.removeAll { $0.name.caseInsensitiveCompare(HouseNPC.displayName) == .orderedSame }
+
+        // Inject the House *only* for "Current Balance".
+        if metric == .balance {
+            let house = LeaderEntry(
+                name: HouseNPC.displayName,
+                gamesWon: 0,
+                dollarsWonCents: 0,
+                longestStreak: 0,
+                currentStreak: 0,
+                lastWinAt: nil,
+                bankrollCents: EconomyStore.shared.houseCents   // ← mirror the House
+            )
+            list.append(house)
+        }
+
         let sorted: [LeaderEntry]
         switch metric {
         case .dollars:
-            sorted = entries.sorted {
+            sorted = list.sorted {
                 if $0.dollarsWonCents == $1.dollarsWonCents {
                     return ($0.gamesWon, $0.longestStreak, $0.name.lowercased())
                         > ($1.gamesWon, $1.longestStreak, $1.name.lowercased())
                 }
                 return $0.dollarsWonCents > $1.dollarsWonCents
             }
+
         case .wins:
-            sorted = entries.sorted {
+            sorted = list.sorted {
                 if $0.gamesWon == $1.gamesWon {
                     return ($0.dollarsWonCents, $0.longestStreak, $0.name.lowercased())
                         > ($1.dollarsWonCents, $1.longestStreak, $1.name.lowercased())
                 }
                 return $0.gamesWon > $1.gamesWon
             }
+
         case .streak:
-            sorted = entries.sorted {
+            sorted = list.sorted {
                 if $0.longestStreak == $1.longestStreak {
                     return ($0.gamesWon, $0.dollarsWonCents, $0.name.lowercased())
                         > ($1.gamesWon, $1.dollarsWonCents, $1.name.lowercased())
                 }
                 return $0.longestStreak > $1.longestStreak
             }
-        
+
         case .balance:
-            sorted = entries.sorted {
+            sorted = list.sorted {
                 if $0.bankrollCents == $1.bankrollCents {
                     return ($0.dollarsWonCents, $0.gamesWon, $0.name.lowercased())
                         > ($1.dollarsWonCents, $1.gamesWon, $1.name.lowercased())
                 }
                 return $0.bankrollCents > $1.bankrollCents
             }
-}
-        return metric == .balance ? sorted : Array(sorted.prefix(10))
+        }
+
+        // For balance we show the full list (so the House can appear anywhere).
+        // For others, keep the top 10.
+        return (metric == .balance) ? sorted : Array(sorted.prefix(10))
     }
 
     // MARK: - Optional migration for old bug

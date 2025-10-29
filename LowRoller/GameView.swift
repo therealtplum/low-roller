@@ -148,112 +148,124 @@ struct GameView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(.orange)
                         .padding(.horizontal)
-                        .disabled(sdShowOverlay || sdHasRevealed) // prevent retrigger while overlay is active or after reveal
+                        .disabled(sdShowOverlay || sdHasRevealed)
                     }
                 }
 
-                // --- Double-or-Nothing decision bar (pre-payout) ---
+                // --- Double-or-Nothing decision (centered vertical layout) ---
                 if inAwaitDouble {
-                    VStack(spacing: 10) {
+                    VStack(spacing: 12) {
                         Text(doubleHeadline)
                             .font(.headline)
-                        HStack(spacing: 12) {
-                            Button {
-                                engine.acceptDoubleOrNothing()
-                                // Reset local UI state for fresh round
-                                picked.removeAll()
-                                rollShake = 0
-                                sdShowOverlay = false
-                                sdRolling = false
-                                sdAnimFaces.removeAll()
-                                stopSuddenDeathRollTimer()
-                                showConfetti = false
-                                scheduleTurnTimer()
-                            } label: {
-                                Text(doubleButtonTitle)
-                                    .font(.subheadline.weight(.semibold))
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
-                                    .background(Color.green.opacity(0.15))
-                                    .cornerRadius(8)
-                            }
+                            .multilineTextAlignment(.center)
 
-                            Button {
-                                engine.declineDoubleOrNothing() // engine finalizes, pays, posts notify
-                            } label: {
-                                Text("Settle Now")
-                                    .font(.subheadline.weight(.semibold))
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
-                                    .background(Color.red.opacity(0.15))
-                                    .cornerRadius(8)
-                            }
+                        // Big centered primary button
+                        Button {
+                            engine.acceptDoubleOrNothing()
+                            // Reset local UI state for fresh round
+                            picked.removeAll()
+                            rollShake = 0
+                            sdShowOverlay = false
+                            sdRolling = false
+                            sdAnimFaces.removeAll()
+                            stopSuddenDeathRollTimer()
+                            showConfetti = false
+                            scheduleTurnTimer()
+                        } label: {
+                            Text(doubleButtonTitle)
+                                .font(.title2.weight(.bold))
+                                .padding(.vertical, 14)
+                                .frame(maxWidth: 360)
                         }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                        .frame(maxWidth: .infinity)
+
+                        // Smaller centered secondary action underneath
+                        Button {
+                            // Finalize payout, then pop straight back to lobby
+                            engine.declineDoubleOrNothing()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                NotificationCenter.default.post(name: .lowRollerBackToLobby, object: nil)
+                            }
+                        } label: {
+                            Text("Settle Now")
+                                .font(.headline)
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: 260)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+                        .frame(maxWidth: .infinity)
                     }
                     .padding(.horizontal)
+                    .transition(.opacity.combined(with: .scale))
+                    .animation(.easeInOut(duration: 0.2), value: inAwaitDouble)
                 }
 
                 // --- Primary buttons (Roll + Set Aside) ---
-                HStack(spacing: 20) {
-                    Button {
-                        guard isYourTurn, !isFinished, !inAwaitDouble, engine.state.lastFaces.isEmpty else { return }
-                        // Trigger dice shake
-                        withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                            engine.roll()
+                if !inAwaitDouble {
+                    HStack(spacing: 20) {
+                        Button {
+                            guard isYourTurn, !isFinished, engine.state.lastFaces.isEmpty else { return }
+                            withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
+                            withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { engine.roll() }
+                        } label: {
+                            Label("Roll", systemImage: "dice.fill")
+                                .font(.title3.weight(.bold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
                         }
-                    } label: {
-                        Label("Roll", systemImage: "dice.fill")
-                            .font(.title3.weight(.bold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
-                    .disabled(!isYourTurn || isFinished || isSuddenDeath || inAwaitDouble || !engine.state.lastFaces.isEmpty || engine.state.remainingDice == 0)
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                        .disabled(!isYourTurn || isFinished || isSuddenDeath || engine.state.remainingDice == 0)
 
-                    Button {
-                        guard isYourTurn, !isFinished, !inAwaitDouble, !picked.isEmpty else { return }
-                        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-                        engine.pick(indices: Array(picked))
-                        picked.removeAll()
-                    } label: {
-                        Label("Set Aside", systemImage: "hand.tap.fill")
-                            .font(.title3.weight(.bold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
+                        Button {
+                            guard isYourTurn, !isFinished, !picked.isEmpty else { return }
+                            UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+                            engine.pick(indices: Array(picked))
+                            picked.removeAll()
+                        } label: {
+                            Label("Set Aside", systemImage: "hand.tap.fill")
+                                .font(.title3.weight(.bold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.blue)
+                        .disabled(!isYourTurn || isFinished || isSuddenDeath || picked.isEmpty)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.blue)
-                    .disabled(!isYourTurn || isFinished || isSuddenDeath || inAwaitDouble || picked.isEmpty)
+                    .padding(.horizontal)
+                    .padding(.top, 4)
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: inAwaitDouble)
                 }
-                .padding(.horizontal)
-                .padding(.top, 4)
 
                 // --- Timeout fallback (secondary button) ---
-                Button {
-                    guard !isFinished, !isSuddenDeath, !inAwaitDouble else { return }
-                    if engine.state.lastFaces.isEmpty && engine.state.remainingDice > 0 {
-                        withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
-                        engine.roll()
+                if !inAwaitDouble {
+                    Button {
+                        guard !isFinished, !isSuddenDeath else { return }
+                        if engine.state.lastFaces.isEmpty && engine.state.remainingDice > 0 {
+                            withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
+                            engine.roll()
+                        }
+                        engine.fallbackPick()
+                    } label: {
+                        Text("Timeout Fallback")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundColor(.gray)
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 20)
+                            .background(Color(white: 0.15))
+                            .clipShape(Capsule())
                     }
-                    engine.fallbackPick()
-                } label: {
-                    Text("Timeout Fallback")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundColor(.gray)
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 20)
-                        .background(Color(white: 0.15))
-                        .clipShape(Capsule())
+                    .padding(.top, 4)
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: inAwaitDouble)
                 }
-                .padding(.top, 4)
-                .disabled(isFinished || isSuddenDeath || inAwaitDouble)
 
                 // --- End of Game UI (read-only) ---
                 if isFinished {
-                    // Prefer the engine's winnerIdx (covers Sudden Death),
-                    // fall back to lowest total if somehow nil.
                     let winner: Player = {
                         if let idx = engine.state.winnerIdx,
                            engine.state.players.indices.contains(idx) {
@@ -269,7 +281,6 @@ struct GameView: View {
                             .multilineTextAlignment(.center)
 
                         Button("Back to Lobby") {
-                            // No leaderboard writes here (handled once in onChange below)
                             NotificationCenter.default.post(name: .lowRollerBackToLobby, object: nil)
                         }
                         .padding(.top, 6)

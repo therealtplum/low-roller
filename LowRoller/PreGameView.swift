@@ -95,7 +95,7 @@ struct PreGameView: View {
                         HStack { Text("Your buy-in"); Spacer(); Text("$\(yourWagerCents / 100)") }
                     }
 
-                    Toggle("You start (random if off)", isOn: $youStart)
+                  //  Toggle("You start (random if off)", isOn: $youStart)
                 } header: {
                     Text("You")
                 }

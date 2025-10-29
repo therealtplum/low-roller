@@ -241,29 +241,6 @@ struct GameView: View {
                     .animation(.easeInOut(duration: 0.2), value: inAwaitDouble)
                 }
 
-                // --- Timeout fallback (secondary button) ---
-                if !inAwaitDouble {
-                    Button {
-                        guard !isFinished, !isSuddenDeath else { return }
-                        if engine.state.lastFaces.isEmpty && engine.state.remainingDice > 0 {
-                            withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
-                            engine.roll()
-                        }
-                        engine.fallbackPick()
-                    } label: {
-                        Text("Timeout Fallback")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundColor(.gray)
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, 20)
-                            .background(Color(white: 0.15))
-                            .clipShape(Capsule())
-                    }
-                    .padding(.top, 4)
-                    .transition(.opacity)
-                    .animation(.easeInOut(duration: 0.2), value: inAwaitDouble)
-                }
-
                 // --- End of Game UI (read-only) ---
                 if isFinished {
                     let winner: Player = {

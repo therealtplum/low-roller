@@ -1,15 +1,15 @@
-// Analytics/AnalyticsEvent.swift
+// AnalyticsEvent.swift
 import Foundation
 
 public struct AnalyticsEvent: Codable {
     public let ts: Date
-    public let type: String                 // e.g. "match_started", "bet_placed"
-    public let installId: String            // stable anon id (once per install)
-    public let sessionId: String            // per app launch, regenerated at cold start
+    public let type: String
+    public let installId: String
+    public let sessionId: String
     public let appVersion: String
     public let buildNumber: String
-    public let payload: [String: CodableValue] // flexible payload
-
+    public let payload: [String: CodableValue]
+    
     public init(type: String, payload: [String: CodableValue]) {
         self.ts = Date()
         self.type = type
@@ -21,58 +21,100 @@ public struct AnalyticsEvent: Codable {
     }
 }
 
-// A flexible value type for arbitrary payloads without making many structs
 public enum CodableValue: Codable {
-    case string(String), int(Int), double(Double), bool(Bool),
-         array([CodableValue]), object([String: CodableValue]), `null`
-
+    case string(String)
+    case int(Int)
+    case double(Double)
+    case bool(Bool)
+    case array([CodableValue])
+    case object([String: CodableValue])
+    case `null`
+    
     public init(from decoder: Decoder) throws {
-        let c = try decoder.singleValueContainer()
-        if c.decodeNil() { self = .null; return }
-        if let v = try? c.decode(Bool.self) { self = .bool(v); return }
-        if let v = try? c.decode(Int.self) { self = .int(v); return }
-        if let v = try? c.decode(Double.self) { self = .double(v); return }
-        if let v = try? c.decode(String.self) { self = .string(v); return }
-        if let v = try? c.decode([String: CodableValue].self) { self = .object(v); return }
-        if let v = try? c.decode([CodableValue].self) { self = .array(v); return }
+        let container = try decoder.singleValueContainer()
+        
+        if container.decodeNil() {
+            self = .null
+            return
+        }
+        
+        if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+            return
+        }
+        
+        if let value = try? container.decode(Int.self) {
+            self = .int(value)
+            return
+        }
+        
+        if let value = try? container.decode(Double.self) {
+            self = .double(value)
+            return
+        }
+        
+        if let value = try? container.decode(String.self) {
+            self = .string(value)
+            return
+        }
+        
+        if let value = try? container.decode([String: CodableValue].self) {
+            self = .object(value)
+            return
+        }
+        
+        if let value = try? container.decode([CodableValue].self) {
+            self = .array(value)
+            return
+        }
+        
         throw DecodingError.typeMismatch(
             CodableValue.self,
-            .init(codingPath: decoder.codingPath, debugDescription: "Unsupported type")
+            DecodingError.Context(
+                codingPath: decoder.codingPath,
+                debugDescription: "Unsupported type"
+            )
         )
     }
-
+    
     public func encode(to encoder: Encoder) throws {
-        var c = encoder.singleValueContainer()
+        var container = encoder.singleValueContainer()
+        
         switch self {
-        case .null: try c.encodeNil()
-        case .bool(let v): try c.encode(v)
-        case .int(let v): try c.encode(v)
-        case .double(let v): try c.encode(v)
-        case .string(let v): try c.encode(v)
-        case .array(let v): try c.encode(v)
-        case .object(let v): try c.encode(v)
+        case .null:
+            try container.encodeNil()
+        case .bool(let value):
+            try container.encode(value)
+        case .int(let value):
+            try container.encode(value)
+        case .double(let value):
+            try container.encode(value)
+        case .string(let value):
+            try container.encode(value)
+        case .array(let value):
+            try container.encode(value)
+        case .object(let value):
+            try container.encode(value)
         }
     }
 }
 
-// Stable, anonymous install id stored once
 public final class InstallId {
     public static let shared = InstallId()
     public let id: String
-
+    
     private init() {
         let key = "analytics.install.id.v1"
         if let existing = UserDefaults.standard.string(forKey: key) {
             self.id = existing
         } else {
-            let new = UUID().uuidString
-            UserDefaults.standard.set(new, forKey: key)
-            self.id = new
+            let newId = UUID().uuidString
+            UserDefaults.standard.set(newId, forKey: key)
+            self.id = newId
         }
     }
 }
 
-// A per-launch session id
 public final class SessionId {
     public static let shared = SessionId()
     public let id: String = UUID().uuidString

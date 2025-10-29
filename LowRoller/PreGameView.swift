@@ -468,11 +468,6 @@ private struct AboutSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var tab: Tab = .rules
 
-    // URL-based export (no big Data blobs)
-    @State private var exportURL: URL? = nil
-    @State private var exportFilename: String = "events.json"
-    @State private var showExporter = false
-
     @AppStorage("analytics.enabled.v1") private var analyticsOn: Bool = true
 
     private var appVersion: String {
@@ -498,13 +493,7 @@ private struct AboutSheet: View {
                     case .rules:
                         ScrollView {
                             VStack(alignment: .leading, spacing: 12) {
-                                Text("How to Play").font(.title3).bold()
-                                Text("""
-                                • Each player antes into the **Pot**.
-                                • On your turn, tap **Roll** and set aside at least one die.
-                                • 3s count as zero. Lowest total wins the pot.
-                                • **Ties:** play **Sudden Death** rolls until one wins.
-                                """)
+                                GameRulesView()
                             }.padding()
                         }
                     case .about:
@@ -544,21 +533,19 @@ private struct AboutSheet: View {
                                     }
 
                                     NavigationLink("Export Event Logs") {
-                                        AnalyticsExportView { url, filename in
-                                            exportURL = url
-                                            exportFilename = filename
-                                            showExporter = true
-                                        }
+                                        AnalyticsExportView(onExportURL: nil)
                                     }
                                 } header: {
                                     Text("Analytics")
                                 } footer: {
-                                    Text("Each line is one JSON event (JSONL). Export as .json for compatibility.")
+                                    Text("Export logs via Share Sheet to Files, AirDrop, or other apps.")
                                         .font(.footnote)
                                         .foregroundStyle(.secondary)
                                 }
                             }
-                            .onAppear { AnalyticsSwitch.enabled = analyticsOn }
+                            .onAppear {
+                                AnalyticsSwitch.enabled = analyticsOn
+                            }
                         }
                     #endif
                     }
@@ -568,34 +555,10 @@ private struct AboutSheet: View {
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
         }
         .presentationDetents([.medium, .large])
-        // Exporter that reads directly from disk via FileWrapper(url:)
-        .fileExporter(
-            isPresented: $showExporter,
-            document: exportURL.map { URLExportDoc(url: $0) },
-            contentType: .plainText,                 // <- prevents preview work
-            defaultFilename: exportFilename
-        ) { result in
-            if case .failure(let err) = result {
-                print("Export failed: \(err.localizedDescription)")
-            }
-        }
     }
 }
 
-// MARK: - URL-backed FileDocument (no in-memory Data blob)
-struct URLExportDoc: FileDocument {
-    static var readableContentTypes: [UTType] { [.plainText] }
-    let url: URL
-    init(url: URL) { self.url = url }
-    init(configuration: ReadConfiguration) throws {
-        self.url = FileManager.default.temporaryDirectory.appendingPathComponent("noop.txt")
-    }
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        try FileWrapper(url: url, options: [.withoutMapping, .immediate])
-    }
-}
-
-// MARK: - PotPreviewCard (ensure it's in scope)
+// MARK: - PotPreviewCard
 struct PotPreviewCard: View {
     let potCents: Int
     let playerCount: Int

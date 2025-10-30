@@ -39,6 +39,9 @@ struct GameView: View {
     @State private var sdResultFacesSnap: [Int:Int] = [:]     // playerIdx -> rolled face (1...6)
     @State private var sdResultOrderSnap: [Int] = []          // stable order of players to show
 
+    // NEW: queue confetti if a human victory fires during SD reveal
+    @State private var pendingConfetti = false
+
     private var isYourTurn: Bool { !engine.state.players[engine.state.turnIdx].isBot }
     private var isFinished: Bool { engine.state.phase == .finished }
     private var isSuddenDeath: Bool { engine.state.phase == .suddenDeath }
@@ -368,6 +371,12 @@ struct GameView: View {
                     let lingered = (sdRevealAt.map { Date().timeIntervalSince($0) } ?? 0) >= minHold
                     if sdHasRevealed && lingered {
                         sdShowOverlay = false
+                        if pendingConfetti {
+                            pendingConfetti = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                fireConfetti()
+                            }
+                        }
                     }
                 }
             }
@@ -386,9 +395,16 @@ struct GameView: View {
             turnTimer?.invalidate(); turnTimer = nil
             stopSuddenDeathRollTimer()
         }
-        // Listen for the engine's "human won" signal and fire confetti
+        // Listen for the engine's "human won" signal and fire (or queue) confetti
         .onReceive(NotificationCenter.default.publisher(for: .humanWonMatch)) { note in
-            if (note.object as? Bool) == true { fireConfetti() }
+            guard (note.object as? Bool) == true else { return }
+            // If we’re in/near SD reveal, queue confetti so the faces can be read first.
+            let justRevealed = sdHasRevealed && (sdRevealAt.map { Date().timeIntervalSince($0) } ?? 0) < 0.9
+            if isSuddenDeath || sdShowOverlay || justRevealed {
+                pendingConfetti = true
+            } else {
+                fireConfetti()
+            }
         }
         // Turn advanced
         .onChangeCompat(engine.state.turnIdx) { _, _ in
@@ -489,6 +505,12 @@ struct GameView: View {
                 if engine.state.phase != .suddenDeath {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                         withAnimation(.easeOut(duration: 0.3)) { sdShowOverlay = false }
+                        if pendingConfetti {
+                            pendingConfetti = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                fireConfetti()
+                            }
+                        }
                     }
                 }
             }

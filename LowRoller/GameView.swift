@@ -15,8 +15,8 @@ struct GameView: View {
     @State private var rollShake: Int = 0
     @State private var showConfetti = false
 
-    // 5:00 per turn
-    @State private var timeLeft: Int = 300
+    // 5:00 per turn (using 30s here for testing)
+    @State private var timeLeft: Int = 30
     @State private var turnTimer: Timer?
 
     // Ensure leaderboard is written once per game
@@ -209,6 +209,7 @@ struct GameView: View {
                         Button {
                             guard isYourTurn, !isFinished, engine.state.lastFaces.isEmpty else { return }
                             withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
+                            resetTurnCountdownIfHuman()          // ← restart countdown on every human roll
                             withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { engine.roll() }
                         } label: {
                             Label("Roll", systemImage: "dice.fill")
@@ -400,6 +401,7 @@ struct GameView: View {
             if !inAwaitDouble { botCtl?.scheduleBotIfNeeded() }
             if oldFaces.isEmpty && !newFaces.isEmpty {
                 withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
+                resetTurnCountdownIfHuman()      // ← restart countdown whenever a human roll produces faces
             }
         }
         // Keep a running *max* of the pot so Game Over shows the doubled amount
@@ -538,23 +540,41 @@ struct GameView: View {
         }
     }
 
-    // MARK: - Turn timer (5:00 with fallback)
+    // MARK: - Turn timer (5:00 with engine-driven timeout)
     private func scheduleTurnTimer() {
         turnTimer?.invalidate()
-        timeLeft = 300
+        timeLeft = 30
+
+        // Only count down during normal play (not finished / sudden death / await double)
         guard !isFinished && !isSuddenDeath && !inAwaitDouble else { return }
+
         turnTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
             timeLeft -= 1
             if timeLeft <= 0 {
                 t.invalidate()
-                if engine.state.lastFaces.isEmpty && engine.state.remainingDice > 0 {
-                    withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
-                    engine.roll()
+
+                // Engine decides what to do on timeout:
+                engine.handleTurnTimeout()
+
+                // If we're still in a normal round and it's a human turn, restart the countdown window
+                if engine.state.phase == .normal,
+                   engine.state.turnIdx < engine.state.players.count,
+                   !engine.state.players[engine.state.turnIdx].isBot,
+                   !isFinished {
+                    timeLeft = 30
+                    scheduleTurnTimer()
                 }
-                engine.fallbackPick()
             }
         }
         if let t = turnTimer { RunLoop.main.add(t, forMode: .common) }
+    }
+
+    // MARK: - Timer reset helper (called on every human roll)
+    private func resetTurnCountdownIfHuman() {
+        guard isYourTurn, !isFinished, !isSuddenDeath, !inAwaitDouble else { return }
+        turnTimer?.invalidate()
+        timeLeft = 30
+        scheduleTurnTimer()
     }
 
     // MARK: - Small helpers

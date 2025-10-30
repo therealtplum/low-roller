@@ -54,8 +54,7 @@ struct GameRulesView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("**Special Rules**")
                         .font(.headline)
-                    Text("• **Sudden Death:** When players tie for lowest score")
-                    Text("• One die will be rolled, winner take all")
+                    Text("• **Sudden Death:** When players tie for lowest score one die will be rolled, winner take all")
                 }
             }
             .padding()

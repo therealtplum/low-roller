@@ -43,7 +43,7 @@ struct LowRollerApp: App {
             .onChange(of: scenePhase) { _, phase in
                 switch phase {
                 case .inactive, .background:
-                    UIApplication.shared.endEditing()
+                    dismissKeyboard()
                     AnalyticsLogger.shared.flush()
                 default:
                     break
@@ -53,8 +53,6 @@ struct LowRollerApp: App {
     }
 }
 
-extension UIApplication {
-    func endEditing() {
-        sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-    }
+fileprivate func dismissKeyboard() {
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
 }

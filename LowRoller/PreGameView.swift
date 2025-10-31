@@ -1,4 +1,4 @@
-// UI/PreGameView.swift - Enhanced Version (FIXED)
+// UI/PreGameView.swift
 import SwiftUI
 import UIKit
 import Foundation
@@ -225,7 +225,6 @@ struct PreGameView: View {
             }
             
             VStack(spacing: 16) {
-                // Name field with enhanced styling
                 HStack {
                     Image(systemName: "person.text.rectangle")
                         .foregroundStyle(.secondary)
@@ -353,16 +352,19 @@ struct PreGameView: View {
                             seats[i].name  = bot.name
                         },
                         onLevelChange: { newLevel in
-                            let pick = assignRandomBotReturning(forIndex: i, to: newLevel, preferUnique: true)
-                            if newLevel == .pro {
+                            // Preserve user-set wagers on level switch.
+                            seats[i].botLevel = newLevel
+                            // If moving to Pro from default $5, bump to a Pro-style random buy-in once.
+                            if newLevel == .pro, seats[i].wagerCents == 500 {
                                 seats[i].wagerCents = randomProWagerCents()
                             }
-                            return pick
+                            // Do not downshift on Pro → Amateur; keep the user's value.
+                            return assignRandomBotReturning(forIndex: i, to: newLevel, preferUnique: true)
                         },
                         onToggleBot: { isOn in
                             if isOn {
                                 let pick = assignRandomBotReturning(forIndex: i, preferUnique: true)
-                                if seats[i].botLevel == .pro {
+                                if seats[i].botLevel == .pro, seats[i].wagerCents == 500 {
                                     seats[i].wagerCents = randomProWagerCents()
                                 }
                                 seats[i].botId = pick.id
@@ -571,7 +573,7 @@ struct PreGameView: View {
     }
 }
 
-// MARK: - Enhanced Seat Row (FIXED - Touch targets separated)
+// MARK: - Enhanced Seat Row (BUY-IN EDITABLE FOR AMATEUR+PRO)
 struct EnhancedSeatRow: View {
     let index: Int
     @Binding var seat: SeatCfg
@@ -714,11 +716,10 @@ struct EnhancedSeatRow: View {
                             .buttonStyle(.bordered)
                         }
                         
-                        if seat.botLevel == .pro {
-                            Stepper(value: $seat.wagerCents, in: 500...10000, step: 500) {
-                                Label("Buy-in: $\(seat.wagerCents / 100)", systemImage: "dollarsign.circle")
-                                    .font(.caption)
-                            }
+                        // ✅ Buy-in editable for BOTH Amateur and Pro bots
+                        Stepper(value: $seat.wagerCents, in: 500...10000, step: 500) {
+                            Label("Buy-in: $\(seat.wagerCents / 100)", systemImage: "dollarsign.circle")
+                                .font(.caption)
                         }
                     } else {
                         // Human controls
@@ -772,7 +773,7 @@ struct EnhancedSeatRow: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 4)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity .combined(with: .move(edge: .top)))
             }
         }
         .sheet(isPresented: $seat.showPicker) {
@@ -877,7 +878,7 @@ struct EnhancedPotPreviewCard: View {
                             .frame(height: 16)
                             .overlay(Color.white.opacity(0.3))
                         
-                        Label("\(formatCents(potCents / playerCount))/player", systemImage: "person.fill")
+                        Label("\(formatCents(potCents / max(playerCount, 1)))/player", systemImage: "person.fill")
                             .font(.caption2)
                             .foregroundStyle(.white.opacity(0.85))
                     }
@@ -977,8 +978,6 @@ struct EnhancedLeaderRow: View {
 }
 
 // MARK: - Supporting Types
-// SeatCfg is defined elsewhere in the project - not redefined here
-
 // BotPicker is specific to this view
 struct BotPicker: View {
     let level: AIBotLevel

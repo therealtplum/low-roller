@@ -2,13 +2,10 @@
 //  BotController_Fixed.swift
 //  LowRoller
 //
-//  Fixed version with ObservableObject conformance
-//
 
 import Foundation
 import Combine
 
-// FIX: Add ObservableObject conformance
 final class BotController: ObservableObject {
     private weak var engine: GameEngine?
     private var workItem: DispatchWorkItem?

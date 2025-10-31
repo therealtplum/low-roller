@@ -53,7 +53,7 @@ struct PreGameView: View {
         for i in 2...8 {
             var cfg = SeatCfg(
                 isBot: true,
-                botLevel: (i == 2) ? .pro : .amateur,
+                botLevel: .pro,
                 name: "",
                 botId: nil,
                 showPicker: false,
@@ -73,8 +73,14 @@ struct PreGameView: View {
         return result
     }
 
-    private var usedBotIds: Set<UUID> {
-        Set(seats.compactMap { $0.botId })
+    // Active "in use" bot IDs. Optionally exclude the row being edited.
+    private func usedBotIds(excluding idx: Int? = nil) -> Set<UUID> {
+        let active = Array(seats.prefix(max(0, count - 1)))
+        if let idx {
+            return Set(active.enumerated().compactMap { $0.offset == idx ? nil : $0.element.botId })
+        } else {
+            return Set(active.compactMap { $0.botId })
+        }
     }
 
     var potPreview: Int {
@@ -344,7 +350,7 @@ struct PreGameView: View {
                     EnhancedSeatRow(
                         index: i,
                         seat: $seats[i],
-                        usedBotIds: usedBotIds,
+                        usedBotIds: usedBotIds(excluding: i),
                         expandedRows: $expandedRows,
                         onSurpriseMe: { assignRandomBotReturning(forIndex: i, preferUnique: true) },
                         onPick: { bot in
@@ -564,7 +570,7 @@ struct PreGameView: View {
         preferUnique: Bool
     ) -> BotIdentity {
         let actualLevel = level ?? seats[i].botLevel
-        let avoiding = preferUnique ? usedBotIds : Set()
+        let avoiding: Set<UUID> = preferUnique ? usedBotIds() : Set<UUID>()
         let pick = BotRoster.random(level: actualLevel, avoiding: avoiding)
         seats[i].botId = pick.id
         seats[i].name = pick.name
@@ -716,7 +722,6 @@ struct EnhancedSeatRow: View {
                             .buttonStyle(.bordered)
                         }
                         
-                        // ✅ Buy-in editable for BOTH Amateur and Pro bots
                         Stepper(value: $seat.wagerCents, in: 500...10000, step: 500) {
                             Label("Buy-in: $\(seat.wagerCents / 100)", systemImage: "dollarsign.circle")
                                 .font(.caption)
@@ -773,7 +778,7 @@ struct EnhancedSeatRow: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 4)
-                .transition(.opacity .combined(with: .move(edge: .top)))
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .sheet(isPresented: $seat.showPicker) {

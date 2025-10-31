@@ -618,7 +618,7 @@ struct GameView: View {
                                 .foregroundColor(.white)
                             Spacer()
                             Group {
-                                if isSuddenRolling && revealed == nil {
+                                if isSuddenRolling {
                                     DiceRollerView(size: 50)
                                         .matchedGeometryEffect(id: "sd-\(idx)", in: animation)
                                         .transition(.scale.combined(with: .opacity))

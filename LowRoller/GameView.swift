@@ -2,18 +2,16 @@
 //  GameView.swift
 //  LowRoller
 //
-//  Complete version with bot-gated action bar and animated Sudden Death
-//
 
 import SwiftUI
 import Combine
 
 struct GameView: View {
-    @ObservedObject var engine: GameEngine  // engine is passed in
+    @ObservedObject var engine: GameEngine
     @State private var botController: BotController?
     @StateObject private var leaderboard = LeaderboardStore()
     @ObservedObject private var economy = EconomyStore.shared
-    
+
     // MARK: - State
     @State private var selectedDice = Set<Int>()
     @State private var timeLeft = 20
@@ -23,74 +21,69 @@ struct GameView: View {
     @State private var showingRules = false
     @State private var botRevealing = false
     @State private var lastBotRevealToken = 0
-    
-    // Sudden Death animation state
+
     @State private var isSuddenRolling = false
-    @State private var suddenRollToken = 0   // guards against overlapping animations
-    
+    @State private var suddenRollToken = 0
+
     // MARK: - Haptics
     private let lightImpact = UIImpactFeedbackGenerator(style: .light)
     private let mediumImpact = UIImpactFeedbackGenerator(style: .medium)
     private let heavyImpact = UIImpactFeedbackGenerator(style: .heavy)
     private let selectionFeedback = UISelectionFeedbackGenerator()
     private let notificationFeedback = UINotificationFeedbackGenerator()
-    
+
     // MARK: - Animation Namespace
     @Namespace private var animation
-    
+
     init(engine: GameEngine) {
         self.engine = engine
     }
-    
+
     var body: some View {
         ZStack {
-            // Background
             backgroundGradient
-            
+
             VStack(spacing: 0) {
-                // HUD
                 HUDView(engine: engine, timeLeft: timeLeft)
                     .padding(.top)
                     .transition(.move(edge: .top).combined(with: .opacity))
-                
-                Spacer()
-                
-                // Main game content
-                gameContent
+
+                DiceStage()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.horizontal)
-                
-                Spacer()
-                
-                // Action area
-                actionButtons
+
+                if engine.state.phase != .finished {
+                    VStack(spacing: 12) {
+                        if engine.state.phase == .normal || engine.state.phase == .suddenDeath {
+                            BottomInfoBar(scoreToBeat: targetScoreToBeat(), onShowRules: { showingRules = true })
+                        }
+                        actionButtons
+                    }
                     .padding(.horizontal)
                     .padding(.bottom, 30)
+                    .transition(.opacity)
+                }
             }
-            
-            // Confetti overlay
+
             if showConfetti {
                 ConfettiView(isActive: $showConfetti)
                     .allowsHitTesting(false)
                     .transition(.opacity)
             }
         }
-        .onAppear {
-            setupGame()
-        }
+        .onAppear { setupGame() }
         .onChange(of: engine.state.turnIdx) { _, _ in
             botController?.scheduleBotIfNeeded()
             resetTimer()
         }
         .onChange(of: engine.state.phase) { _, newPhase in
             botController?.scheduleBotIfNeeded()
-            // Stop any lingering sudden-death animation if we leave that phase
             if newPhase != .suddenDeath {
                 isSuddenRolling = false
                 suddenRollToken &+= 1
             }
         }
         .onChange(of: engine.state.lastFaces) { _, newFaces in
-            // If it's the bot's turn and dice just appeared, show a short reveal delay
             if (currentPlayer?.isBot ?? false), !newFaces.isEmpty {
                 lastBotRevealToken &+= 1
                 let token = lastBotRevealToken
@@ -110,15 +103,13 @@ struct GameView: View {
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .navigationBarTrailing) {
-                            Button("Done") {
-                                showingRules = false
-                            }
+                            Button("Done") { showingRules = false }
                         }
                     }
             }
         }
     }
-    
+
     // MARK: - Background
     @ViewBuilder
     private var backgroundGradient: some View {
@@ -132,16 +123,12 @@ struct GameView: View {
         )
         .ignoresSafeArea()
         .overlay(
-            // Subtle animated background pattern
             GeometryReader { geometry in
                 ForEach(0..<5) { index in
                     Circle()
                         .fill(
                             RadialGradient(
-                                colors: [
-                                    Color.white.opacity(0.02),
-                                    Color.clear
-                                ],
+                                colors: [Color.white.opacity(0.02), Color.clear],
                                 center: .center,
                                 startRadius: 50,
                                 endRadius: 200
@@ -162,10 +149,45 @@ struct GameView: View {
             .allowsHitTesting(false)
         )
     }
-    
-    // MARK: - Game Content
+
+    // MARK: - Bottom info bar (locked)
     @ViewBuilder
-    private var gameContent: some View {
+    private func BottomInfoBar(scoreToBeat: Int?, onShowRules: @escaping () -> Void) -> some View {
+        HStack {
+            if let target = scoreToBeat {
+                Label {
+                    Text("Score to Beat: \(target)")
+                        .font(.subheadline).fontWeight(.semibold)
+                } icon: {
+                    Image(systemName: "flag.checkered")
+                }
+                .foregroundColor(.yellow)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10).fill(Color.yellow.opacity(0.18))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10).stroke(Color.yellow.opacity(0.35), lineWidth: 1)
+                )
+                .transition(.opacity)
+            } else {
+                Color.clear.frame(height: 36).cornerRadius(10)
+            }
+
+            Spacer()
+
+            Button(action: onShowRules) {
+                Image(systemName: "questionmark.circle")
+                    .font(.title3)
+                    .foregroundColor(.white.opacity(0.75))
+            }
+            .frame(width: 44, height: 44)
+        }
+    }
+
+    // MARK: - Stage switcher (only the middle changes)
+    @ViewBuilder
+    private func DiceStage() -> some View {
         Group {
             switch engine.state.phase {
             case .normal:
@@ -178,60 +200,25 @@ struct GameView: View {
                 finishedView
             }
         }
-        .animation(.spring(response: 0.5, dampingFraction: 0.8), value: engine.state.phase)
+        .animation(.spring(response: 0.45, dampingFraction: 0.85), value: engine.state.phase)
+        .animation(.spring(response: 0.30, dampingFraction: 0.80), value: engine.state.lastFaces)
     }
-    
+
     // MARK: - Normal Game View
     @ViewBuilder
     private var normalGameView: some View {
-        VStack(spacing: 20) {
-            // Current player indicator
-            if let currentPlayer = currentPlayer {
-                HStack {
-                    Image(systemName: currentPlayer.isBot ? "cpu" : "person.fill")
-                        .font(.title3)
-                    Text("\(currentPlayer.display)'s Turn")
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                }
-                .foregroundColor(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(
-                    Capsule()
-                        .fill(currentPlayer.isBot ? Color.orange.opacity(0.3) : Color.blue.opacity(0.3))
-                        .overlay(
-                            Capsule()
-                                .strokeBorder(currentPlayer.isBot ? Color.orange : Color.blue, lineWidth: 1.5)
-                        )
-                )
-                .transition(.scale.combined(with: .opacity))
-            }
-            
-            // Dice display
+        Group {
             if !engine.state.lastFaces.isEmpty {
                 diceGrid
                     .transition(.scale.combined(with: .opacity))
             } else if engine.state.remainingDice > 0 {
                 emptyDiceIndicator
-            }
-            
-            // Score to beat
-            if let target = targetScoreToBeat() {
-                Text("Score to Beat: \(target)")
-                    .font(.headline)
-                    .foregroundColor(.yellow)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.yellow.opacity(0.2))
-                    )
-                    .scaleEffect(0.75)
+            } else {
+                Color.clear.frame(height: 160)
             }
         }
     }
-    
+
     // MARK: - Dice Grid
     @ViewBuilder
     private var diceGrid: some View {
@@ -265,7 +252,7 @@ struct GameView: View {
                 )
         )
     }
-    
+
     // MARK: - Empty Dice Indicator
     @ViewBuilder
     private var emptyDiceIndicator: some View {
@@ -273,7 +260,7 @@ struct GameView: View {
             Image(systemName: "dice.fill")
                 .font(.system(size: 48))
                 .foregroundColor(.gray)
-            
+
             Text("Tap Roll to throw \(engine.state.remainingDice) dice")
                 .font(.headline)
                 .foregroundColor(.gray)
@@ -296,8 +283,8 @@ struct GameView: View {
                 )
         )
     }
-    
-    // MARK: - Action Buttons (gated during bot turns)
+
+    // MARK: - Action Buttons
     @ViewBuilder
     private var actionButtons: some View {
         HStack(spacing: 16) {
@@ -307,38 +294,34 @@ struct GameView: View {
                         if engine.state.lastFaces.isEmpty && engine.state.remainingDice > 0 {
                             rollButton
                         } else if !engine.state.lastFaces.isEmpty {
-                                pickButton
+                            pickButton
+                        } else {
+                            botActionPlaceholder
                         }
                     } else if engine.state.phase == .suddenDeath {
-                        // Keep space stable under sudden death (no human input here)
                         botActionPlaceholder
+                    } else if engine.state.phase == .awaitDouble {
+                        Color.clear.frame(height: 0)
+                    } else {
+                        Color.clear.frame(height: 0)
                     }
                 } else {
                     botActionPlaceholder
                 }
             }
-            
-            // Rules button (always visible)
-            Button(action: { showingRules = true }) {
-                Image(systemName: "questionmark.circle")
-                    .font(.title2)
-                    .foregroundColor(.white.opacity(0.7))
-            }
-            .frame(width: 44, height: 44)
         }
+        .frame(minHeight: 56)
         .animation(.easeInOut(duration: 0.2), value: isBotsTurn)
         .animation(.easeInOut(duration: 0.2), value: engine.state.phase)
     }
-    
+
     // MARK: - Buttons
     @ViewBuilder
     private var rollButton: some View {
         Button(action: rollDice) {
             HStack(spacing: 12) {
-                Image(systemName: "dice.fill")
-                    .font(.title2)
-                Text("Roll \(engine.state.remainingDice) Dice")
-                    .font(.headline)
+                Image(systemName: "dice.fill").font(.title2)
+                Text("Roll \(engine.state.remainingDice) Dice").font(.headline)
             }
             .foregroundColor(.white)
             .frame(maxWidth: .infinity)
@@ -370,13 +353,12 @@ struct GameView: View {
                 }
         )
     }
-    
+
     @ViewBuilder
     private var pickButton: some View {
         Button(action: pickSelectedDice) {
             HStack(spacing: 12) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.title2)
+                Image(systemName: "checkmark.circle.fill").font(.title2)
                 Text(selectedDice.isEmpty ? "Set Aside Dice" : "Keep \(selectedDice.count)")
                     .font(.headline)
             }
@@ -404,19 +386,36 @@ struct GameView: View {
         .disabled(selectedDice.isEmpty || currentPlayer?.isBot ?? false)
         .animation(.spring(), value: selectedDice.isEmpty)
     }
-    
+
+    // MARK: - Helpers for bot placeholder text/spinner
+    private var botPlaceholderText: String {
+        switch engine.state.phase {
+        case .suddenDeath: return "Sudden Death…"
+        case .finished:    return "Game Over"
+        default:           return "Bot is rolling…"
+        }
+    }
+
+    private var showBotSpinner: Bool {
+        engine.state.phase != .finished
+    }
+
     // MARK: - Bot Placeholder
     private var botActionPlaceholder: some View {
         HStack(spacing: 12) {
             Image(systemName: "cpu")
                 .font(.title3)
                 .foregroundColor(.white.opacity(0.85))
-            Text(engine.state.phase == .suddenDeath ? "Sudden Death…" : "Bot is rolling…")
+
+            Text(botPlaceholderText)
                 .font(.headline)
                 .foregroundColor(.white.opacity(0.9))
+
             Spacer()
-            ProgressView()
-                .progressViewStyle(.circular)
+
+            if showBotSpinner {
+                ProgressView().progressViewStyle(.circular)
+            }
         }
         .padding(.vertical, 14)
         .padding(.horizontal, 12)
@@ -431,31 +430,27 @@ struct GameView: View {
         )
         .transition(.opacity)
     }
-    
+
     // MARK: - Actions
     private func rollDice() {
         mediumImpact.prepare()
-        
         withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
             rollButtonScale = 0.9
         }
-        
+
         engine.roll()
         mediumImpact.impactOccurred()
-        
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            withAnimation(.spring()) {
-                rollButtonScale = 1.0
-            }
+            withAnimation(.spring()) { rollButtonScale = 1.0 }
         }
         resetTimer()
     }
-    
+
     private func toggleDiceSelection(at index: Int) {
         guard !(currentPlayer?.isBot ?? false) else { return }
-        
         lightImpact.prepare()
-        
+
         withAnimation(.spring(response: 0.2, dampingFraction: 0.8)) {
             if selectedDice.contains(index) {
                 selectedDice.remove(index)
@@ -463,84 +458,74 @@ struct GameView: View {
                 selectedDice.insert(index)
             }
         }
-        
         lightImpact.impactOccurred()
     }
-    
+
     private func selectAllMatchingDice(face: Int) {
         guard !(currentPlayer?.isBot ?? false) else { return }
-        
         heavyImpact.prepare()
-        
+
         let matchingIndices = engine.state.lastFaces.enumerated()
             .filter { $0.element == face }
             .map { $0.offset }
-        
+
         withAnimation(.spring()) {
             matchingIndices.forEach { selectedDice.insert($0) }
         }
-        
         heavyImpact.impactOccurred(intensity: 0.8)
     }
-    
+
     private func pickSelectedDice() {
         guard !selectedDice.isEmpty else { return }
-        
         notificationFeedback.prepare()
-        
+
         let indices = Array(selectedDice).sorted()
         engine.pick(indices: indices)
-        
+
         withAnimation(.spring()) {
             selectedDice.removeAll()
         }
-        
         notificationFeedback.notificationOccurred(.success)
-        
         resetTimer()
     }
-    
+
     private func clearSelection() {
         selectionFeedback.prepare()
-        
-        withAnimation(.spring()) {
-            selectedDice.removeAll()
-        }
-        
+        withAnimation(.spring()) { selectedDice.removeAll() }
         selectionFeedback.selectionChanged()
     }
-    
+
     // MARK: - Helpers
     private var currentPlayer: Player? {
         guard engine.state.turnIdx < engine.state.players.count else { return nil }
         return engine.state.players[engine.state.turnIdx]
     }
-    
+
     private var isBotsTurn: Bool { currentPlayer?.isBot ?? false }
-    
+
     private var canRoll: Bool {
         engine.state.remainingDice > 0 &&
         engine.state.lastFaces.isEmpty &&
         engine.state.phase == .normal
     }
-    
+
     private func targetScoreToBeat() -> Int? {
         let currentIdx = engine.state.turnIdx
         let opponentScores = engine.state.players.enumerated()
             .filter { $0.offset != currentIdx }
             .map { $0.element.totalScore }
             .filter { $0 > 0 }
-        
+
         if let minNonZero = opponentScores.min() {
             return minNonZero
         }
-        
+
         let anyZeroOpponent = engine.state.players.enumerated()
             .contains { $0.offset != currentIdx && $0.element.totalScore == 0 }
-        
+
         return anyZeroOpponent ? 0 : nil
     }
-    
+
     private func setupGame() {
         if botController == nil {
             botController = BotController(bind: engine)
@@ -548,13 +533,13 @@ struct GameView: View {
         botController?.scheduleBotIfNeeded()
         startTimer()
     }
-    
+
     private func startTimer() {
         timer?.invalidate()
         timeLeft = 20
-        
+
         guard !(currentPlayer?.isBot ?? false) else { return }
-        
+
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             if timeLeft > 0 {
                 timeLeft -= 1
@@ -566,21 +551,21 @@ struct GameView: View {
             }
         }
     }
-    
+
     private func resetTimer() {
         timeLeft = 20
     }
-    
+
     private func handleTimeout() {
         if !(currentPlayer?.isBot ?? false) {
             engine.handleTurnTimeout()
         }
         resetTimer()
     }
-    
+
     private func handleMatchEnd(humanWon: Bool) {
         timer?.invalidate()
-        
+
         if humanWon {
             showConfetti = true
             notificationFeedback.notificationOccurred(.success)
@@ -590,42 +575,38 @@ struct GameView: View {
         } else {
             notificationFeedback.notificationOccurred(.error)
         }
-        
         updateLeaderboard()
     }
-    
+
     private func updateLeaderboard() {
         guard let winnerIdx = engine.state.winnerIdx else { return }
         let winner = engine.state.players[winnerIdx]
         let losers = engine.state.players.enumerated()
             .filter { $0.offset != winnerIdx }
             .map { $0.element }
-        
+
         leaderboard.recordWinner(name: winner.display, potCents: engine.state.potCents)
         leaderboard.updateBankroll(name: winner.display, bankrollCents: winner.bankrollCents)
-        
+
         for loser in losers {
             leaderboard.recordLoss(name: loser.display)
             leaderboard.updateBankroll(name: loser.display, bankrollCents: loser.bankrollCents)
         }
     }
-    
-    // MARK: - SUDDEN DEATH (Animated)
+
+    // MARK: - SUDDEN DEATH
     @ViewBuilder
     private var suddenDeathView: some View {
         VStack(spacing: 22) {
             Text("SUDDEN DEATH")
-                .font(.largeTitle)
-                .fontWeight(.bold)
+                .font(.largeTitle).fontWeight(.bold)
                 .foregroundColor(.yellow)
                 .transition(.opacity)
-            
+
             Text("Lowest roll wins!")
-                .font(.headline)
-                .foregroundColor(.white)
+                .font(.headline).foregroundColor(.white)
                 .transition(.opacity)
-            
-            // Contenders & animated dice
+
             if let contenders = engine.state.suddenContenders {
                 VStack(spacing: 10) {
                     ForEach(contenders, id: \.self) { idx in
@@ -636,8 +617,6 @@ struct GameView: View {
                                 .font(.headline)
                                 .foregroundColor(.white)
                             Spacer()
-                            
-                            // While rolling -> animated cycler; else -> revealed real face
                             Group {
                                 if isSuddenRolling && revealed == nil {
                                     DiceRollerView(size: 50)
@@ -647,7 +626,6 @@ struct GameView: View {
                                     DiceView(face: face, size: 50, shakeToken: 0)
                                         .transition(.scale.combined(with: .opacity))
                                 } else {
-                                    // Before first roll
                                     DiceView(face: 1, size: 50, shakeToken: 0)
                                         .opacity(0.25)
                                 }
@@ -655,25 +633,20 @@ struct GameView: View {
                         }
                         .padding(12)
                         .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color.white.opacity(0.08))
+                            RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08))
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
                         )
                         .transition(.opacity)
                     }
                 }
             }
-            
-            // Roll button (single action controls full sequence)
+
             Button(action: startSuddenDeathAnimation) {
                 HStack(spacing: 10) {
-                    Image(systemName: isSuddenRolling ? "hourglass" : "dice")
-                        .font(.headline)
-                    Text(isSuddenRolling ? "Rolling…" : "Roll for Sudden Death!")
-                        .font(.headline)
+                    Image(systemName: isSuddenRolling ? "hourglass" : "dice").font(.headline)
+                    Text(isSuddenRolling ? "Rolling…" : "Roll for Sudden Death!").font(.headline)
                 }
                 .foregroundColor(.white)
                 .padding(.vertical, 14)
@@ -686,47 +659,39 @@ struct GameView: View {
         }
         .padding()
     }
-    
-    /// Orchestrates the animated rolling → engine resolve → reveal
+
     private func startSuddenDeathAnimation() {
         guard !isSuddenRolling else { return }
         heavyImpact.impactOccurred()
-        
+
         isSuddenRolling = true
         suddenRollToken &+= 1
         let myToken = suddenRollToken
-        
-        // Let the dice "spin" for a beat, then resolve
+
         let spinDuration: TimeInterval = 1.0
         DispatchQueue.main.asyncAfter(deadline: .now() + spinDuration) {
-            // If nothing cancelled us in the meantime:
             guard myToken == suddenRollToken else { return }
-            
             _ = engine.rollSuddenDeath()
-            // Small delay so the UI can transition from cycler -> revealed
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
                 guard myToken == suddenRollToken else { return }
                 isSuddenRolling = false
             }
         }
     }
-    
+
     // MARK: - Double or Nothing View
     @ViewBuilder
     private var doubleOrNothingView: some View {
         VStack(spacing: 24) {
             Text("💰 DOUBLE OR NOTHING? 💰")
-                .font(.largeTitle)
-                .fontWeight(.bold)
+                .font(.largeTitle).fontWeight(.bold)
                 .foregroundColor(.yellow)
 
             Text("Risk it all for double the pot!")
-                .font(.headline)
-                .foregroundColor(.white)
+                .font(.headline).foregroundColor(.white)
 
             Text("Current Pot: \(formatCurrency(engine.state.potCents))")
-                .font(.title2)
-                .foregroundColor(.green)
+                .font(.title2).foregroundColor(.green)
 
             HStack(spacing: 20) {
                 Button("Accept") {
@@ -754,32 +719,27 @@ struct GameView: View {
         }
         .padding()
     }
-    
+
     // MARK: - Finished View
     @ViewBuilder
     private var finishedView: some View {
         VStack(spacing: 20) {
             if let winnerIdx = engine.state.winnerIdx {
                 let winner = engine.state.players[winnerIdx]
-                
+
                 Text("🎉 Game Over! 🎉")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-                
+                    .font(.largeTitle).fontWeight(.bold)
+
                 Text("\(winner.display) Wins!")
-                    .font(.title)
-                    .foregroundColor(.yellow)
-                
+                    .font(.title).foregroundColor(.yellow)
+
                 Text("Pot Won: \(formatCurrency(engine.state.potCents))")
-                    .font(.title2)
-                    .foregroundColor(.green)
-                
-                // Show final scores
+                    .font(.title2).foregroundColor(.green)
+
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Final Scores:")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    
+                        .font(.headline).foregroundColor(.white)
+
                     ForEach(engine.state.players.indices.sorted(by: {
                         engine.state.players[$0].totalScore < engine.state.players[$1].totalScore
                     }), id: \.self) { idx in
@@ -794,11 +754,10 @@ struct GameView: View {
                 }
                 .padding()
                 .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.white.opacity(0.1))
+                    RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.1))
                 )
             }
-            
+
             Button(action: {
                 NotificationCenter.default.post(name: .lowRollerBackToLobby, object: nil)
             }) {
@@ -809,14 +768,14 @@ struct GameView: View {
                     .padding()
                     .background(Color.blue)
                     .cornerRadius(12)
-                    .contentShape(RoundedRectangle(cornerRadius: 12)) // full rounded rect is tappable
+                    .contentShape(RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
             .padding(.horizontal)
         }
         .padding()
     }
-    
+
     private func formatCurrency(_ cents: Int) -> String {
         let dollars = Double(cents) / 100.0
         let nf = NumberFormatter()
@@ -834,9 +793,9 @@ struct DiceButton: View {
     let size: CGFloat
     let onTap: () -> Void
     let onLongPress: () -> Void
-    
+
     @State private var isPressed = false
-    
+
     var body: some View {
         DiceView(face: face, selected: isSelected, size: size, shakeToken: 0)
             .scaleEffect(isPressed ? 0.9 : 1.0)
@@ -845,11 +804,7 @@ struct DiceButton: View {
             .onTapGesture(perform: onTap)
             .onLongPressGesture(
                 minimumDuration: 0.5,
-                pressing: { pressing in
-                    withAnimation {
-                        isPressed = pressing
-                    }
-                },
+                pressing: { pressing in withAnimation { isPressed = pressing } },
                 perform: onLongPress
             )
             .accessibilityElement(children: .ignore)
@@ -864,13 +819,12 @@ private struct DiceRollerView: View {
     let size: CGFloat
     @State private var face: Int = 1
     @State private var tick = 0
-    
+
     private let timer = Timer.publish(every: 0.08, on: .main, in: .common).autoconnect()
-    
+
     var body: some View {
         DiceView(face: face, size: size, shakeToken: tick)
             .onReceive(timer) { _ in
-                // cycle faces 1-6 and bump shake
                 face = (face % 6) + 1
                 tick += 1
             }
@@ -880,7 +834,7 @@ private struct DiceRollerView: View {
 // MARK: - Shake Effect for dice animations
 struct ShakeEffect: GeometryEffect {
     var animatableData: CGFloat
-    
+
     func effectValue(size: CGSize) -> ProjectionTransform {
         let offset = sin(animatableData * .pi * 4) * 5
         return ProjectionTransform(

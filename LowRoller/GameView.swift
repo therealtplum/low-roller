@@ -1,651 +1,890 @@
+//
+//  GameView.swift
+//  LowRoller
+//
+//  Complete version with bot-gated action bar and animated Sudden Death
+//
+
 import SwiftUI
-import Foundation
-import UIKit
+import Combine
 
-// MARK: - Main GameView
 struct GameView: View {
-    @ObservedObject var engine: GameEngine
-    @StateObject private var leaders = LeaderboardStore()
-
-    // Observe House (if you show any house metrics in HUD)
+    @ObservedObject var engine: GameEngine  // engine is passed in
+    @State private var botController: BotController?
+    @StateObject private var leaderboard = LeaderboardStore()
     @ObservedObject private var economy = EconomyStore.shared
-
-    @State private var botCtl: BotController?
-    @State private var picked: Set<Int> = Set<Int>()   // avoid inference choke
-    @State private var rollShake: Int = 0
+    
+    // MARK: - State
+    @State private var selectedDice = Set<Int>()
+    @State private var timeLeft = 20
+    @State private var timer: Timer?
     @State private var showConfetti = false
-
-    // 5:00 per turn (using 30s here for testing)
-    @State private var timeLeft: Int = 30
-    @State private var turnTimer: Timer?
-
-    // Ensure leaderboard is written once per game
-    @State private var wroteOutcome = false
-
-    // Track the (growing) pre-payout pot so we record/display correct winnings
-    @State private var startingPotCents: Int = 0
-
-    // Sudden Death animation overlay state (multi-way)
-    @State private var sdShowOverlay = false
-    @State private var sdRolling = false
-    @State private var sdAnimFaces: [Int:Int] = [:]     // playerIdx -> face while spinning
-    @State private var sdRollTimer: Timer?
-
-    // Anti-flash / anti-retrigger flags
-    @State private var sdHasRevealed = false
-    @State private var sdRevealAt: Date? = nil
-
-    // Snapshot of the final SD faces (so UI can still display after engine advances phase)
-    @State private var sdResultFacesSnap: [Int:Int] = [:]     // playerIdx -> rolled face (1...6)
-    @State private var sdResultOrderSnap: [Int] = []          // stable order of players to show
-
-    // NEW: queue confetti if a human victory fires during SD reveal
-    @State private var pendingConfetti = false
-
-    private var isYourTurn: Bool { !engine.state.players[engine.state.turnIdx].isBot }
-    private var isFinished: Bool { engine.state.phase == .finished }
-    private var isSuddenDeath: Bool { engine.state.phase == .suddenDeath }
-    private var inAwaitDouble: Bool { engine.state.phase == .awaitDouble }
-
+    @State private var rollButtonScale: CGFloat = 1.0
+    @State private var showingRules = false
+    @State private var botRevealing = false
+    @State private var lastBotRevealToken = 0
+    
+    // Sudden Death animation state
+    @State private var isSuddenRolling = false
+    @State private var suddenRollToken = 0   // guards against overlapping animations
+    
+    // MARK: - Haptics
+    private let lightImpact = UIImpactFeedbackGenerator(style: .light)
+    private let mediumImpact = UIImpactFeedbackGenerator(style: .medium)
+    private let heavyImpact = UIImpactFeedbackGenerator(style: .heavy)
+    private let selectionFeedback = UISelectionFeedbackGenerator()
+    private let notificationFeedback = UINotificationFeedbackGenerator()
+    
+    // MARK: - Animation Namespace
+    @Namespace private var animation
+    
+    init(engine: GameEngine) {
+        self.engine = engine
+    }
+    
     var body: some View {
         ZStack {
-            // ---- main content ----
-            VStack(spacing: 16) {
+            // Background
+            backgroundGradient
+            
+            VStack(spacing: 0) {
+                // HUD
                 HUDView(engine: engine, timeLeft: timeLeft)
-
-                // --- Dice area ---
-                ZStack {
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(Color.black.opacity(0.15))
-
-                    if engine.state.lastFaces.isEmpty {
-                        Text("Roll to start")
-                            .foregroundStyle(.secondary)
-                            .padding()
-                    } else {
-                        GeometryReader { geo in
-                            let outerHPad: CGFloat = 32
-                            let spacing: CGFloat = 14
-                            let vPad: CGFloat = 20
-                            let minDie: CGFloat = 78
-                            let maxDiePhone: CGFloat = 112
-
-                            let count = max(0, engine.state.lastFaces.count)
-                            let rows = max(1, Int(ceil(Double(count) / 2.0)))
-
-                            let usableW = max(0, geo.size.width - outerHPad)
-                            let dieW = (usableW - spacing) / 2.0
-                            let usableH = max(0, geo.size.height - vPad - CGFloat(max(0, rows - 1)) * spacing)
-                            let dieH = usableH / CGFloat(rows)
-                            let dieSize = max(minDie, min(maxDiePhone, floor(min(dieW, dieH))))
-
-                            let columns: [GridItem] = [
-                                GridItem(.fixed(dieSize), spacing: spacing, alignment: .center),
-                                GridItem(.fixed(dieSize), spacing: spacing, alignment: .center),
-                            ]
-
-                            LazyVGrid(columns: columns, alignment: .center, spacing: spacing) {
-                                ForEach(Array(engine.state.lastFaces.enumerated()), id: \.offset) { (i, f) in
-                                    DiceView(face: f,
-                                             selected: picked.contains(i),
-                                             size: dieSize,
-                                             shakeToken: rollShake)
-                                    .onTapGesture {
-                                        guard isYourTurn, !isFinished, !inAwaitDouble else { return }
-                                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                                            if picked.contains(i) { picked.remove(i) } else { picked.insert(i) }
-                                        }
-                                    }
-                                }
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 10)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        }
-                    }
-                }
-                .padding(.horizontal)
-                .frame(minHeight: 360)
-
-                // --- Sudden Death UI (multi-way) ---
-                if isSuddenDeath {
-                    VStack(spacing: 10) {
-                        Text("Sudden Death!")
-                            .font(.title2).bold()
-                        if let contenders = engine.state.suddenContenders {
-                            Text(contenders.count == 2 ? "Lowest roll is eliminated (re-roll ties)." :
-                                 "Group sudden death: lowest roll is eliminated (re-roll ties).")
-                                .foregroundStyle(.secondary)
-
-                            // Show most recent results (if any)
-                            if let rolls = engine.state.suddenRolls {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    ForEach(contenders, id: \.self) { idx in
-                                        let name = engine.state.players[idx].display
-                                        let face = rolls[idx]
-                                        HStack {
-                                            Text(name).font(.subheadline.weight(.medium))
-                                            Spacer()
-                                            if let f = face {
-                                                let adj = (f == 3) ? 0 : f
-                                                Text("\(f) → \(adj)").monospaced()
-                                            } else {
-                                                Text("—").monospaced()
-                                            }
-                                        }
-                                    }
-                                }
-                                .padding(.horizontal)
-                            }
-                        }
-
-                        Button {
-                            guard engine.state.phase == .suddenDeath else { return }
-                            startSuddenDeathAnimationAndResolve()
-                        } label: {
-                            Text((engine.state.suddenRolls == nil) ? "Roll Sudden Death" : "Roll Again")
-                                .font(.title3.weight(.bold))
-                                .padding(.vertical, 10)
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.orange)
-                        .padding(.horizontal)
-                        .disabled(sdShowOverlay || sdHasRevealed)
-                    }
-                }
-
-                // --- Double-or-Nothing decision (centered vertical layout) ---
-                if inAwaitDouble {
-                    VStack(spacing: 12) {
-                        Text(doubleHeadline)
-                            .font(.headline)
-                            .multilineTextAlignment(.center)
-
-                        // Big centered primary button
-                        Button {
-                            engine.acceptDoubleOrNothing()
-                            // Reset local UI state for fresh round
-                            picked.removeAll()
-                            rollShake = 0
-                            sdShowOverlay = false
-                            sdRolling = false
-                            sdAnimFaces.removeAll()
-                            stopSuddenDeathRollTimer()
-                            showConfetti = false
-                            scheduleTurnTimer()
-                        } label: {
-                            Text(doubleButtonTitle)
-                                .font(.title2.weight(.bold))
-                                .padding(.vertical, 14)
-                                .frame(maxWidth: 360)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.green)
-                        .frame(maxWidth: .infinity)
-
-                        // Smaller centered secondary action underneath
-                        Button {
-                            // Finalize payout, then pop straight back to lobby
-                            engine.declineDoubleOrNothing()
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                                NotificationCenter.default.post(name: .lowRollerBackToLobby, object: nil)
-                            }
-                        } label: {
-                            Text("Settle Now")
-                                .font(.headline)
-                                .padding(.vertical, 10)
-                                .frame(maxWidth: 260)
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.red)
-                        .frame(maxWidth: .infinity)
-                    }
+                    .padding(.top)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                
+                Spacer()
+                
+                // Main game content
+                gameContent
                     .padding(.horizontal)
-                    .transition(.opacity.combined(with: .scale))
-                    .animation(.easeInOut(duration: 0.2), value: inAwaitDouble)
-                }
-
-                // --- Primary buttons (Roll + Set Aside) ---
-                if !inAwaitDouble {
-                    HStack(spacing: 20) {
-                        Button {
-                            guard isYourTurn, !isFinished, engine.state.lastFaces.isEmpty else { return }
-                            withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
-                            resetTurnCountdownIfHuman()          // ← restart countdown on every human roll
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { engine.roll() }
-                        } label: {
-                            Label("Roll", systemImage: "dice.fill")
-                                .font(.title3.weight(.bold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.green)
-                        .disabled(!isYourTurn || isFinished || isSuddenDeath || engine.state.remainingDice == 0)
-
-                        Button {
-                            guard isYourTurn, !isFinished, !picked.isEmpty else { return }
-                            UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-                            engine.pick(indices: Array(picked))
-                            picked.removeAll()
-                        } label: {
-                            Label("Set Aside", systemImage: "hand.tap.fill")
-                                .font(.title3.weight(.bold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.blue)
-                        .disabled(!isYourTurn || isFinished || isSuddenDeath || picked.isEmpty)
-                    }
+                
+                Spacer()
+                
+                // Action area
+                actionButtons
                     .padding(.horizontal)
-                    .padding(.top, 4)
-                    .transition(.opacity)
-                    .animation(.easeInOut(duration: 0.2), value: inAwaitDouble)
-                }
-
-                // --- End of Game UI (read-only) ---
-                if isFinished {
-                    let winner: Player = {
-                        if let idx = engine.state.winnerIdx,
-                           engine.state.players.indices.contains(idx) {
-                            return engine.state.players[idx]
-                        } else {
-                            return engine.state.players.min(by: { $0.totalScore < $1.totalScore })!
-                        }
-                    }()
-
-                    VStack(spacing: 6) {
-                        Text("Game Over").font(.headline)
-                        Text("Winner: \(winner.display) • Total: \(winner.totalScore) • Pot: \(currency(startingPotCents))")
-                            .multilineTextAlignment(.center)
-
-                        Button("Back to Lobby") {
-                            NotificationCenter.default.post(name: .lowRollerBackToLobby, object: nil)
-                        }
-                        .padding(.top, 6)
-                    }
-                    .padding(.top, 8)
-                }
-
-                Spacer(minLength: 8)
+                    .padding(.bottom, 30)
             }
-
-            // ---- confetti overlay (full screen) ----
-            ConfettiView(isActive: $showConfetti, intensity: 1.2, fallDuration: 3.0)
-                .allowsHitTesting(false)
-                .ignoresSafeArea()
-
-            // ---- Sudden Death animation overlay (multi-way) ----
-            if sdShowOverlay {
-                Color.black.opacity(0.55).ignoresSafeArea()
-                VStack(spacing: 14) {
-                    Text(sdRolling ? "Rolling…" : "Sudden Death Result")
-                        .font(.title3.weight(.semibold))
-
-                    // Prefer live engine SD state; if engine has advanced, show the snapshot
-                    let contenders = engine.state.suddenContenders ?? sdResultOrderSnap
-                    let faceSource: (Int) -> Int? = { idx in
-                        if sdRolling {
-                            return sdAnimFaces[idx]
-                        } else {
-                            return engine.state.suddenRolls?[idx] ?? sdResultFacesSnap[idx]
-                        }
-                    }
-
-                    if !contenders.isEmpty {
-                        GeometryReader { geo in
-                            let count = contenders.count
-                            // Columns: 1 for single, 2 fixed for two, adaptive for 3+
-                            let columns: [GridItem] = {
-                                if count <= 1 { return [GridItem(.flexible(), spacing: 16)] }
-                                if count == 2 { return [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)] }
-                                return [GridItem(.adaptive(minimum: 72), spacing: 16)]
-                            }()
-
-                            // Die size: bigger when only 1–2 contenders
-                            let dieSize: CGFloat = {
-                                if count <= 1 { return min(140, max(90, geo.size.width * 0.35)) }
-                                if count == 2 { return min(120, max(84, geo.size.width * 0.28)) }
-                                return 72
-                            }()
-
-                            LazyVGrid(columns: columns, spacing: 16) {
-                                ForEach(contenders, id: \.self) { idx in
-                                    let name = engine.state.players.indices.contains(idx)
-                                        ? engine.state.players[idx].display
-                                        : "Player \(idx+1)"
-                                    let faceToShow = faceSource(idx) ?? 1
-                                    VStack(spacing: 6) {
-                                        DiceView(face: faceToShow,
-                                                 selected: false,
-                                                 size: dieSize,
-                                                 shakeToken: rollShake)
-                                        Text(name).font(.caption).lineLimit(1).truncationMode(.tail)
-                                    }
-                                }
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        }
-                        .frame(height: 200)
-                        .padding(.top, 6)
-
-                        if !sdRolling {
-                            VStack(alignment: .leading, spacing: 4) {
-                                ForEach(contenders, id: \.self) { idx in
-                                    if let f = faceSource(idx) {
-                                        let adj = (f == 3) ? 0 : f
-                                        let name = engine.state.players.indices.contains(idx)
-                                            ? engine.state.players[idx].display
-                                            : "Player \(idx+1)"
-                                        Text("\(name): \(f) → \(adj)")
-                                            .monospaced()
-                                    }
-                                }
-                            }
-                            .padding(.top, 4)
-                        }
-                    }
-
-                    if !sdRolling {
-                        Text("Tap to continue")
-                            .font(.footnote.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 2)
-                    }
-                }
-                .padding(20)
-                .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color(white: 0.12))
-                        .shadow(radius: 12)
-                )
-                .padding(.horizontal, 24)
-                .transition(.opacity.combined(with: .scale))
-                .animation(.easeInOut(duration: 0.2), value: sdShowOverlay)
-                // Allow dismiss by tap (only after result is shown, and lingered a bit)
-                .onTapGesture {
-                    guard !sdRolling else { return }
-                    let minHold: TimeInterval = 1.0
-                    let lingered = (sdRevealAt.map { Date().timeIntervalSince($0) } ?? 0) >= minHold
-                    if sdHasRevealed && lingered {
-                        sdShowOverlay = false
-                        if pendingConfetti {
-                            pendingConfetti = false
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                                fireConfetti()
-                            }
-                        }
-                    }
-                }
+            
+            // Confetti overlay
+            if showConfetti {
+                ConfettiView(isActive: $showConfetti)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
             }
         }
         .onAppear {
-            wroteOutcome = false
-            // Capture current pot; we’ll keep the *max* pot as doubles happen
-            startingPotCents = engine.state.potCents
-
-            let b = BotController(bind: engine)
-            botCtl = b
-            scheduleTurnTimer()
-            if !inAwaitDouble { b.scheduleBotIfNeeded() }
+            setupGame()
         }
-        .onDisappear {
-            turnTimer?.invalidate(); turnTimer = nil
-            stopSuddenDeathRollTimer()
+        .onChange(of: engine.state.turnIdx) { _, _ in
+            botController?.scheduleBotIfNeeded()
+            resetTimer()
         }
-        // Listen for the engine's "human won" signal and fire (or queue) confetti
-        .onReceive(NotificationCenter.default.publisher(for: .humanWonMatch)) { note in
-            guard (note.object as? Bool) == true else { return }
-            // If we’re in/near SD reveal, queue confetti so the faces can be read first.
-            let justRevealed = sdHasRevealed && (sdRevealAt.map { Date().timeIntervalSince($0) } ?? 0) < 0.9
-            if isSuddenDeath || sdShowOverlay || justRevealed {
-                pendingConfetti = true
-            } else {
-                fireConfetti()
+        .onChange(of: engine.state.phase) { _, newPhase in
+            botController?.scheduleBotIfNeeded()
+            // Stop any lingering sudden-death animation if we leave that phase
+            if newPhase != .suddenDeath {
+                isSuddenRolling = false
+                suddenRollToken &+= 1
             }
         }
-        // Turn advanced
-        .onChangeCompat(engine.state.turnIdx) { _, _ in
-            picked.removeAll()
-            scheduleTurnTimer()
-            if !inAwaitDouble { botCtl?.scheduleBotIfNeeded() }
-        }
-        // When dice appear (after empty) trigger wiggle — works for bots too
-        .onChangeCompat(engine.state.lastFaces) { oldFaces, newFaces in
-            if !inAwaitDouble { botCtl?.scheduleBotIfNeeded() }
-            if oldFaces.isEmpty && !newFaces.isEmpty {
-                withAnimation(.easeOut(duration: 0.45)) { rollShake &+= 1 }
-                resetTurnCountdownIfHuman()      // ← restart countdown whenever a human roll produces faces
-            }
-        }
-        // Keep a running *max* of the pot so Game Over shows the doubled amount
-        .onChangeCompat(engine.state.potCents) { _, newVal in
-            if newVal > startingPotCents { startingPotCents = newVal }
-        }
-        // Phase transitions: write outcome, and stop timers while awaiting decision
-        .onChangeCompat(engine.state.phase) { _, newPhase in
-            if newPhase == .finished {
-                writeOutcomeIfNeeded()
-            } else {
-                // Any non-finished phase resets the guard for the next game
-                wroteOutcome = false
-            }
-            if newPhase == .awaitDouble {
-                // Halt timers/bots so we don't re-enter SD or auto-advance
-                turnTimer?.invalidate(); turnTimer = nil
-            }
-        }
-    }
-
-    // MARK: - Sudden Death animation driver (multi-way)
-    private func startSuddenDeathAnimationAndResolve() {
-        // Prevent post-resolution re-entry and mid-animation retrigger
-        guard engine.state.phase == .suddenDeath else { return }
-        guard !sdShowOverlay && !sdRolling else { return }
-
-        // Tunables
-        let spinDuration: TimeInterval = 1.25   // longer spin to build suspense
-        let revealDelay: TimeInterval = 0.12    // small beat so SwiftUI publishes faces
-
-        // Prepare overlay
-        sdHasRevealed = false
-        sdRevealAt = nil
-        sdResultFacesSnap = [:]
-        sdResultOrderSnap = []
-        sdShowOverlay = true
-        sdRolling = true
-        withAnimation(.easeOut(duration: 0.2)) { rollShake &+= 1 }
-
-        // Initialize anim faces for current contenders
-        if let contenders = engine.state.suddenContenders {
-            for idx in contenders { sdAnimFaces[idx] = Int.random(in: 1...6) }
-        }
-
-        // Spin the dice faces rapidly until we reveal the true result
-        stopSuddenDeathRollTimer()
-        sdRollTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { _ in
-            if let contenders = engine.state.suddenContenders {
-                for idx in contenders { sdAnimFaces[idx] = Int.random(in: 1...6) }
-            }
-        }
-        if let t = sdRollTimer { RunLoop.main.add(t, forMode: .common) }
-
-        // Resolve, then reveal after a short pause so faces are definitely in state
-        let impact = UIImpactFeedbackGenerator(style: .heavy)
-        DispatchQueue.main.asyncAfter(deadline: .now() + spinDuration) {
-            _ = engine.rollSuddenDeath()
-            impact.impactOccurred()
-
-            stopSuddenDeathRollTimer()
-
-            // Give SwiftUI a brief beat to publish suddenRolls, then show the result
-            DispatchQueue.main.asyncAfter(deadline: .now() + revealDelay) {
-                // SNAPSHOT the faces right now (before engine potentially advances again)
-                if let liveRolls = engine.state.suddenRolls {
-                    sdResultFacesSnap = liveRolls
-                    if let liveOrder = engine.state.suddenContenders {
-                        sdResultOrderSnap = liveOrder
-                    } else {
-                        // fallback: stable order from keys
-                        sdResultOrderSnap = Array(liveRolls.keys).sorted()
-                    }
-                } else if let liveOrder = engine.state.suddenContenders {
-                    // If rolls somehow nil, snapshot anim faces so UI still shows something
-                    sdResultFacesSnap = Dictionary(uniqueKeysWithValues: liveOrder.map { ($0, sdAnimFaces[$0] ?? 1) })
-                    sdResultOrderSnap = liveOrder
+        .onChange(of: engine.state.lastFaces) { _, newFaces in
+            // If it's the bot's turn and dice just appeared, show a short reveal delay
+            if (currentPlayer?.isBot ?? false), !newFaces.isEmpty {
+                lastBotRevealToken &+= 1
+                let token = lastBotRevealToken
+                botRevealing = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                    if token == lastBotRevealToken { botRevealing = false }
                 }
-
-                sdRolling = false
-                sdHasRevealed = true
-                sdRevealAt = Date()
-
-                // If the engine already moved on (winner decided), gently auto-dismiss
-                if engine.state.phase != .suddenDeath {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                        withAnimation(.easeOut(duration: 0.3)) { sdShowOverlay = false }
-                        if pendingConfetti {
-                            pendingConfetti = false
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                                fireConfetti()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .humanWonMatch)) { notification in
+            handleMatchEnd(humanWon: notification.object as? Bool ?? false)
+        }
+        .sheet(isPresented: $showingRules) {
+            NavigationView {
+                GameRulesView()
+                    .navigationTitle("How to Play")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Done") {
+                                showingRules = false
                             }
                         }
                     }
-                }
             }
         }
     }
-
-    private func stopSuddenDeathRollTimer() {
-        sdRollTimer?.invalidate()
-        sdRollTimer = nil
-    }
-
-    private func writeOutcomeIfNeeded() {
-        guard !wroteOutcome else { return }
-
-        let players = engine.state.players
-        guard !players.isEmpty else { return }
-
-        // Prefer engine's winnerIdx (covers Sudden Death),
-        // fallback to lowest total for legacy states.
-        let winnerIdx = engine.state.winnerIdx
-            ?? (players.indices.min { players[$0].totalScore < players[$1].totalScore } ?? 0)
-
-        let winnerDisplay = players[winnerIdx].display
-        let losers = players.enumerated()
-            .filter { $0.offset != winnerIdx }
-            .map { $0.element.display }
-
-        // Record the match with the *final (possibly doubled)* pot we tracked
-        leaders.recordMatch(
-            winnerName: winnerDisplay,
-            loserNames: losers,
-            potCents: startingPotCents
-        )
-
-        // Sync all bankrolls back to leaderboard
-        for p in players {
-            leaders.updateBankroll(name: p.display, bankrollCents: p.bankrollCents)
-        }
-
-        wroteOutcome = true
-    }
-
-    private func fireConfetti() {
-        showConfetti = true
-        let h = UINotificationFeedbackGenerator()
-        h.notificationOccurred(.success)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-            showConfetti = false
-        }
-    }
-
-    // MARK: - Turn timer (5:00 with engine-driven timeout)
-    private func scheduleTurnTimer() {
-        turnTimer?.invalidate()
-        timeLeft = 30
-
-        // Only count down during normal play (not finished / sudden death / await double)
-        guard !isFinished && !isSuddenDeath && !inAwaitDouble else { return }
-
-        turnTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
-            timeLeft -= 1
-            if timeLeft <= 0 {
-                t.invalidate()
-
-                // Engine decides what to do on timeout:
-                engine.handleTurnTimeout()
-
-                // If we're still in a normal round and it's a human turn, restart the countdown window
-                if engine.state.phase == .normal,
-                   engine.state.turnIdx < engine.state.players.count,
-                   !engine.state.players[engine.state.turnIdx].isBot,
-                   !isFinished {
-                    timeLeft = 30
-                    scheduleTurnTimer()
-                }
-            }
-        }
-        if let t = turnTimer { RunLoop.main.add(t, forMode: .common) }
-    }
-
-    // MARK: - Timer reset helper (called on every human roll)
-    private func resetTurnCountdownIfHuman() {
-        guard isYourTurn, !isFinished, !isSuddenDeath, !inAwaitDouble else { return }
-        turnTimer?.invalidate()
-        timeLeft = 30
-        scheduleTurnTimer()
-    }
-
-    // MARK: - Small helpers
-    private func currency(_ cents: Int) -> String {
-        let sign = cents < 0 ? "-" : ""
-        let absVal = abs(cents)
-        return "\(sign)$\(absVal/100).\(String(format: "%02d", absVal % 100))"
-    }
-
-    // Double-or-Nothing labels
-    private var doubleHeadline: String {
-        if let w = engine.state.winnerIdx,
-           engine.state.players.indices.contains(w) {
-            let name = engine.state.players[w].display
-            return "\(name) is ahead. Double or Nothing?"
-        }
-        return "Double or Nothing?"
-    }
-
-    private var doubleButtonTitle: String {
-        let n = engine.state.doubleCount
-        return n == 0 ? "Double the Pot" : "Double Again (x\(n + 1))"
-    }
-}
-
-// MARK: - iOS 16/17 compatible onChange helper
-@available(iOS 13.0, *)
-extension View {
+    
+    // MARK: - Background
     @ViewBuilder
-    func onChangeCompat<V: Equatable>(
-        _ value: V,
-        perform: @escaping (_ old: V, _ new: V) -> Void
-    ) -> some View {
-        if #available(iOS 17.0, *) {
-            self.onChange(of: value) { oldValue, newValue in perform(oldValue, newValue) }
-        } else {
-            self.onChange(of: value) { newValue in perform(newValue, newValue) }
+    private var backgroundGradient: some View {
+        LinearGradient(
+            colors: [
+                Color(red: 0.05, green: 0.1, blue: 0.15),
+                Color(red: 0.02, green: 0.05, blue: 0.08)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .ignoresSafeArea()
+        .overlay(
+            // Subtle animated background pattern
+            GeometryReader { geometry in
+                ForEach(0..<5) { index in
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color.white.opacity(0.02),
+                                    Color.clear
+                                ],
+                                center: .center,
+                                startRadius: 50,
+                                endRadius: 200
+                            )
+                        )
+                        .frame(width: 400, height: 400)
+                        .offset(
+                            x: CGFloat.random(in: 0...geometry.size.width),
+                            y: CGFloat.random(in: 0...geometry.size.height)
+                        )
+                        .animation(
+                            Animation.linear(duration: Double.random(in: 20...40))
+                                .repeatForever(autoreverses: true),
+                            value: index
+                        )
+                }
+            }
+            .allowsHitTesting(false)
+        )
+    }
+    
+    // MARK: - Game Content
+    @ViewBuilder
+    private var gameContent: some View {
+        Group {
+            switch engine.state.phase {
+            case .normal:
+                normalGameView
+            case .suddenDeath:
+                suddenDeathView
+            case .awaitDouble:
+                doubleOrNothingView
+            case .finished:
+                finishedView
+            }
         }
+        .animation(.spring(response: 0.5, dampingFraction: 0.8), value: engine.state.phase)
+    }
+    
+    // MARK: - Normal Game View
+    @ViewBuilder
+    private var normalGameView: some View {
+        VStack(spacing: 20) {
+            // Current player indicator
+            if let currentPlayer = currentPlayer {
+                HStack {
+                    Image(systemName: currentPlayer.isBot ? "cpu" : "person.fill")
+                        .font(.title3)
+                    Text("\(currentPlayer.display)'s Turn")
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule()
+                        .fill(currentPlayer.isBot ? Color.orange.opacity(0.3) : Color.blue.opacity(0.3))
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(currentPlayer.isBot ? Color.orange : Color.blue, lineWidth: 1.5)
+                        )
+                )
+                .transition(.scale.combined(with: .opacity))
+            }
+            
+            // Dice display
+            if !engine.state.lastFaces.isEmpty {
+                diceGrid
+                    .transition(.scale.combined(with: .opacity))
+            } else if engine.state.remainingDice > 0 {
+                emptyDiceIndicator
+            }
+            
+            // Score to beat
+            if let target = targetScoreToBeat() {
+                Text("Score to Beat: \(target)")
+                    .font(.headline)
+                    .foregroundColor(.yellow)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.yellow.opacity(0.2))
+                    )
+                    .scaleEffect(0.75)
+            }
+        }
+    }
+    
+    // MARK: - Dice Grid
+    @ViewBuilder
+    private var diceGrid: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 90, maximum: 110))],
+            spacing: 10
+        ) {
+            ForEach(Array(engine.state.lastFaces.enumerated()), id: \.offset) { idx, face in
+                DiceButton(
+                    face: face,
+                    isSelected: selectedDice.contains(idx),
+                    size: 90
+                ) {
+                    toggleDiceSelection(at: idx)
+                } onLongPress: {
+                    selectAllMatchingDice(face: face)
+                }
+                .transition(.asymmetric(
+                    insertion: .scale.combined(with: .opacity).animation(.spring().delay(Double(idx) * 0.05)),
+                    removal: .scale.combined(with: .opacity)
+                ))
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                )
+        )
+    }
+    
+    // MARK: - Empty Dice Indicator
+    @ViewBuilder
+    private var emptyDiceIndicator: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "dice.fill")
+                .font(.system(size: 48))
+                .foregroundColor(.gray)
+            
+            Text("Tap Roll to throw \(engine.state.remainingDice) dice")
+                .font(.headline)
+                .foregroundColor(.gray)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.white.opacity(0.02))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.1), Color.clear],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                )
+        )
+    }
+    
+    // MARK: - Action Buttons (gated during bot turns)
+    @ViewBuilder
+    private var actionButtons: some View {
+        HStack(spacing: 16) {
+            Group {
+                if !isBotsTurn {
+                    if engine.state.phase == .normal {
+                        if engine.state.lastFaces.isEmpty && engine.state.remainingDice > 0 {
+                            rollButton
+                        } else if !engine.state.lastFaces.isEmpty {
+                                pickButton
+                        }
+                    } else if engine.state.phase == .suddenDeath {
+                        // Keep space stable under sudden death (no human input here)
+                        botActionPlaceholder
+                    }
+                } else {
+                    botActionPlaceholder
+                }
+            }
+            
+            // Rules button (always visible)
+            Button(action: { showingRules = true }) {
+                Image(systemName: "questionmark.circle")
+                    .font(.title2)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            .frame(width: 44, height: 44)
+        }
+        .animation(.easeInOut(duration: 0.2), value: isBotsTurn)
+        .animation(.easeInOut(duration: 0.2), value: engine.state.phase)
+    }
+    
+    // MARK: - Buttons
+    @ViewBuilder
+    private var rollButton: some View {
+        Button(action: rollDice) {
+            HStack(spacing: 12) {
+                Image(systemName: "dice.fill")
+                    .font(.title2)
+                Text("Roll \(engine.state.remainingDice) Dice")
+                    .font(.headline)
+            }
+            .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.blue, Color.blue.opacity(0.7)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
+            )
+            .shadow(color: Color.blue.opacity(0.3), radius: 8, y: 4)
+        }
+        .scaleEffect(rollButtonScale)
+        .disabled(!canRoll || currentPlayer?.isBot ?? false)
+        .gesture(
+            DragGesture(minimumDistance: 30)
+                .onEnded { value in
+                    if value.translation.height < -30 && canRoll && !(currentPlayer?.isBot ?? false) {
+                        rollDice()
+                    }
+                }
+        )
+    }
+    
+    @ViewBuilder
+    private var pickButton: some View {
+        Button(action: pickSelectedDice) {
+            HStack(spacing: 12) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.title2)
+                Text(selectedDice.isEmpty ? "Set Aside Dice" : "Keep \(selectedDice.count)")
+                    .font(.headline)
+            }
+            .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(
+                        LinearGradient(
+                            colors: selectedDice.isEmpty
+                                ? [Color.gray.opacity(0.6), Color.gray.opacity(0.4)]
+                                : [Color.green, Color.green.opacity(0.7)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
+            )
+            .shadow(color: Color.green.opacity(0.3), radius: 8, y: 4)
+        }
+        .disabled(selectedDice.isEmpty || currentPlayer?.isBot ?? false)
+        .animation(.spring(), value: selectedDice.isEmpty)
+    }
+    
+    // MARK: - Bot Placeholder
+    private var botActionPlaceholder: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "cpu")
+                .font(.title3)
+                .foregroundColor(.white.opacity(0.85))
+            Text(engine.state.phase == .suddenDeath ? "Sudden Death…" : "Bot is rolling…")
+                .font(.headline)
+                .foregroundColor(.white.opacity(0.9))
+            Spacer()
+            ProgressView()
+                .progressViewStyle(.circular)
+        }
+        .padding(.vertical, 14)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.white.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+        .transition(.opacity)
+    }
+    
+    // MARK: - Actions
+    private func rollDice() {
+        mediumImpact.prepare()
+        
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+            rollButtonScale = 0.9
+        }
+        
+        engine.roll()
+        mediumImpact.impactOccurred()
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            withAnimation(.spring()) {
+                rollButtonScale = 1.0
+            }
+        }
+        resetTimer()
+    }
+    
+    private func toggleDiceSelection(at index: Int) {
+        guard !(currentPlayer?.isBot ?? false) else { return }
+        
+        lightImpact.prepare()
+        
+        withAnimation(.spring(response: 0.2, dampingFraction: 0.8)) {
+            if selectedDice.contains(index) {
+                selectedDice.remove(index)
+            } else {
+                selectedDice.insert(index)
+            }
+        }
+        
+        lightImpact.impactOccurred()
+    }
+    
+    private func selectAllMatchingDice(face: Int) {
+        guard !(currentPlayer?.isBot ?? false) else { return }
+        
+        heavyImpact.prepare()
+        
+        let matchingIndices = engine.state.lastFaces.enumerated()
+            .filter { $0.element == face }
+            .map { $0.offset }
+        
+        withAnimation(.spring()) {
+            matchingIndices.forEach { selectedDice.insert($0) }
+        }
+        
+        heavyImpact.impactOccurred(intensity: 0.8)
+    }
+    
+    private func pickSelectedDice() {
+        guard !selectedDice.isEmpty else { return }
+        
+        notificationFeedback.prepare()
+        
+        let indices = Array(selectedDice).sorted()
+        engine.pick(indices: indices)
+        
+        withAnimation(.spring()) {
+            selectedDice.removeAll()
+        }
+        
+        notificationFeedback.notificationOccurred(.success)
+        
+        resetTimer()
+    }
+    
+    private func clearSelection() {
+        selectionFeedback.prepare()
+        
+        withAnimation(.spring()) {
+            selectedDice.removeAll()
+        }
+        
+        selectionFeedback.selectionChanged()
+    }
+    
+    // MARK: - Helpers
+    private var currentPlayer: Player? {
+        guard engine.state.turnIdx < engine.state.players.count else { return nil }
+        return engine.state.players[engine.state.turnIdx]
+    }
+    
+    private var isBotsTurn: Bool { currentPlayer?.isBot ?? false }
+    
+    private var canRoll: Bool {
+        engine.state.remainingDice > 0 &&
+        engine.state.lastFaces.isEmpty &&
+        engine.state.phase == .normal
+    }
+    
+    private func targetScoreToBeat() -> Int? {
+        let currentIdx = engine.state.turnIdx
+        let opponentScores = engine.state.players.enumerated()
+            .filter { $0.offset != currentIdx }
+            .map { $0.element.totalScore }
+            .filter { $0 > 0 }
+        
+        if let minNonZero = opponentScores.min() {
+            return minNonZero
+        }
+        
+        let anyZeroOpponent = engine.state.players.enumerated()
+            .contains { $0.offset != currentIdx && $0.element.totalScore == 0 }
+        
+        return anyZeroOpponent ? 0 : nil
+    }
+    
+    private func setupGame() {
+        if botController == nil {
+            botController = BotController(bind: engine)
+        }
+        botController?.scheduleBotIfNeeded()
+        startTimer()
+    }
+    
+    private func startTimer() {
+        timer?.invalidate()
+        timeLeft = 20
+        
+        guard !(currentPlayer?.isBot ?? false) else { return }
+        
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            if timeLeft > 0 {
+                timeLeft -= 1
+                if timeLeft == 5 && !(currentPlayer?.isBot ?? false) {
+                    notificationFeedback.notificationOccurred(.warning)
+                }
+            } else {
+                handleTimeout()
+            }
+        }
+    }
+    
+    private func resetTimer() {
+        timeLeft = 20
+    }
+    
+    private func handleTimeout() {
+        if !(currentPlayer?.isBot ?? false) {
+            engine.handleTurnTimeout()
+        }
+        resetTimer()
+    }
+    
+    private func handleMatchEnd(humanWon: Bool) {
+        timer?.invalidate()
+        
+        if humanWon {
+            showConfetti = true
+            notificationFeedback.notificationOccurred(.success)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                showConfetti = false
+            }
+        } else {
+            notificationFeedback.notificationOccurred(.error)
+        }
+        
+        updateLeaderboard()
+    }
+    
+    private func updateLeaderboard() {
+        guard let winnerIdx = engine.state.winnerIdx else { return }
+        let winner = engine.state.players[winnerIdx]
+        let losers = engine.state.players.enumerated()
+            .filter { $0.offset != winnerIdx }
+            .map { $0.element }
+        
+        leaderboard.recordWinner(name: winner.display, potCents: engine.state.potCents)
+        leaderboard.updateBankroll(name: winner.display, bankrollCents: winner.bankrollCents)
+        
+        for loser in losers {
+            leaderboard.recordLoss(name: loser.display)
+            leaderboard.updateBankroll(name: loser.display, bankrollCents: loser.bankrollCents)
+        }
+    }
+    
+    // MARK: - SUDDEN DEATH (Animated)
+    @ViewBuilder
+    private var suddenDeathView: some View {
+        VStack(spacing: 22) {
+            Text("SUDDEN DEATH")
+                .font(.largeTitle)
+                .fontWeight(.bold)
+                .foregroundColor(.yellow)
+                .transition(.opacity)
+            
+            Text("Lowest roll wins!")
+                .font(.headline)
+                .foregroundColor(.white)
+                .transition(.opacity)
+            
+            // Contenders & animated dice
+            if let contenders = engine.state.suddenContenders {
+                VStack(spacing: 10) {
+                    ForEach(contenders, id: \.self) { idx in
+                        let name = engine.state.players[idx].display
+                        let revealed = engine.state.suddenRolls?[idx] ?? nil
+                        HStack {
+                            Text(name)
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            Spacer()
+                            
+                            // While rolling -> animated cycler; else -> revealed real face
+                            Group {
+                                if isSuddenRolling && revealed == nil {
+                                    DiceRollerView(size: 50)
+                                        .matchedGeometryEffect(id: "sd-\(idx)", in: animation)
+                                        .transition(.scale.combined(with: .opacity))
+                                } else if let face = revealed {
+                                    DiceView(face: face, size: 50, shakeToken: 0)
+                                        .transition(.scale.combined(with: .opacity))
+                                } else {
+                                    // Before first roll
+                                    DiceView(face: 1, size: 50, shakeToken: 0)
+                                        .opacity(0.25)
+                                }
+                            }
+                        }
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color.white.opacity(0.08))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                        )
+                        .transition(.opacity)
+                    }
+                }
+            }
+            
+            // Roll button (single action controls full sequence)
+            Button(action: startSuddenDeathAnimation) {
+                HStack(spacing: 10) {
+                    Image(systemName: isSuddenRolling ? "hourglass" : "dice")
+                        .font(.headline)
+                    Text(isSuddenRolling ? "Rolling…" : "Roll for Sudden Death!")
+                        .font(.headline)
+                }
+                .foregroundColor(.white)
+                .padding(.vertical, 14)
+                .frame(maxWidth: .infinity)
+                .background(isSuddenRolling ? Color.gray : Color.red)
+                .cornerRadius(12)
+            }
+            .disabled(isSuddenRolling)
+            .animation(.easeInOut(duration: 0.2), value: isSuddenRolling)
+        }
+        .padding()
+    }
+    
+    /// Orchestrates the animated rolling → engine resolve → reveal
+    private func startSuddenDeathAnimation() {
+        guard !isSuddenRolling else { return }
+        heavyImpact.impactOccurred()
+        
+        isSuddenRolling = true
+        suddenRollToken &+= 1
+        let myToken = suddenRollToken
+        
+        // Let the dice "spin" for a beat, then resolve
+        let spinDuration: TimeInterval = 1.0
+        DispatchQueue.main.asyncAfter(deadline: .now() + spinDuration) {
+            // If nothing cancelled us in the meantime:
+            guard myToken == suddenRollToken else { return }
+            
+            _ = engine.rollSuddenDeath()
+            // Small delay so the UI can transition from cycler -> revealed
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+                guard myToken == suddenRollToken else { return }
+                isSuddenRolling = false
+            }
+        }
+    }
+    
+    // MARK: - Double or Nothing View
+    @ViewBuilder
+    private var doubleOrNothingView: some View {
+        VStack(spacing: 24) {
+            Text("💰 DOUBLE OR NOTHING? 💰")
+                .font(.largeTitle)
+                .fontWeight(.bold)
+                .foregroundColor(.yellow)
+
+            Text("Risk it all for double the pot!")
+                .font(.headline)
+                .foregroundColor(.white)
+
+            Text("Current Pot: \(formatCurrency(engine.state.potCents))")
+                .font(.title2)
+                .foregroundColor(.green)
+
+            HStack(spacing: 20) {
+                Button("Accept") {
+                    notificationFeedback.notificationOccurred(.success)
+                    engine.acceptDoubleOrNothing()
+                }
+                .font(.headline)
+                .foregroundColor(.white)
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(Color.green)
+                .cornerRadius(12)
+
+                Button("Decline") {
+                    notificationFeedback.notificationOccurred(.warning)
+                    engine.declineDoubleOrNothing()
+                }
+                .font(.headline)
+                .foregroundColor(.white)
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(Color.red)
+                .cornerRadius(12)
+            }
+        }
+        .padding()
+    }
+    
+    // MARK: - Finished View
+    @ViewBuilder
+    private var finishedView: some View {
+        VStack(spacing: 20) {
+            if let winnerIdx = engine.state.winnerIdx {
+                let winner = engine.state.players[winnerIdx]
+                
+                Text("🎉 Game Over! 🎉")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
+                
+                Text("\(winner.display) Wins!")
+                    .font(.title)
+                    .foregroundColor(.yellow)
+                
+                Text("Pot Won: \(formatCurrency(engine.state.potCents))")
+                    .font(.title2)
+                    .foregroundColor(.green)
+                
+                // Show final scores
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Final Scores:")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
+                    ForEach(engine.state.players.indices.sorted(by: {
+                        engine.state.players[$0].totalScore < engine.state.players[$1].totalScore
+                    }), id: \.self) { idx in
+                        HStack {
+                            Text(engine.state.players[idx].display)
+                            Spacer()
+                            Text("\(engine.state.players[idx].totalScore)")
+                                .fontWeight(.semibold)
+                        }
+                        .foregroundColor(idx == winnerIdx ? .yellow : .white.opacity(0.7))
+                    }
+                }
+                .padding()
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.white.opacity(0.1))
+                )
+            }
+            
+            Button(action: {
+                NotificationCenter.default.post(name: .lowRollerBackToLobby, object: nil)
+            }) {
+                Text("Back to Lobby")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .cornerRadius(12)
+                    .contentShape(RoundedRectangle(cornerRadius: 12)) // full rounded rect is tappable
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal)
+        }
+        .padding()
+    }
+    
+    private func formatCurrency(_ cents: Int) -> String {
+        let dollars = Double(cents) / 100.0
+        let nf = NumberFormatter()
+        nf.numberStyle = .currency
+        nf.maximumFractionDigits = 2
+        nf.minimumFractionDigits = dollars.truncatingRemainder(dividingBy: 1) == 0 ? 0 : 2
+        return nf.string(from: NSNumber(value: dollars)) ?? String(format: "$%.2f", dollars)
     }
 }
 
-// MARK: - ShakeEffect (used by DiceView)
-struct ShakeEffect: GeometryEffect {
-    var amount: CGFloat = 10
-    var shakesPerUnit: CGFloat = 6
-    var animatableData: CGFloat
+// MARK: - Dice Button Component
+struct DiceButton: View {
+    let face: Int
+    let isSelected: Bool
+    let size: CGFloat
+    let onTap: () -> Void
+    let onLongPress: () -> Void
+    
+    @State private var isPressed = false
+    
+    var body: some View {
+        DiceView(face: face, selected: isSelected, size: size, shakeToken: 0)
+            .scaleEffect(isPressed ? 0.9 : 1.0)
+            .animation(.spring(response: 0.2), value: isPressed)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onTap)
+            .onLongPressGesture(
+                minimumDuration: 0.5,
+                pressing: { pressing in
+                    withAnimation {
+                        isPressed = pressing
+                    }
+                },
+                perform: onLongPress
+            )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Dice showing \(face == 3 ? "3, worth 0 points" : "\(face)")")
+            .accessibilityHint(isSelected ? "Selected. Tap to deselect" : "Tap to select. Long press to select all \(face)s")
+            .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+}
 
+// MARK: - Rolling Dice Cycler (for Sudden Death animation)
+private struct DiceRollerView: View {
+    let size: CGFloat
+    @State private var face: Int = 1
+    @State private var tick = 0
+    
+    private let timer = Timer.publish(every: 0.08, on: .main, in: .common).autoconnect()
+    
+    var body: some View {
+        DiceView(face: face, size: size, shakeToken: tick)
+            .onReceive(timer) { _ in
+                // cycle faces 1-6 and bump shake
+                face = (face % 6) + 1
+                tick += 1
+            }
+    }
+}
+
+// MARK: - Shake Effect for dice animations
+struct ShakeEffect: GeometryEffect {
+    var animatableData: CGFloat
+    
     func effectValue(size: CGSize) -> ProjectionTransform {
-        let translation = amount * sin(animatableData * .pi * shakesPerUnit)
-        return ProjectionTransform(CGAffineTransform(translationX: translation, y: 0))
+        let offset = sin(animatableData * .pi * 4) * 5
+        return ProjectionTransform(
+            CGAffineTransform(translationX: offset, y: 0)
+        )
     }
 }

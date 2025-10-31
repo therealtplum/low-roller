@@ -1,23 +1,46 @@
-// BotController.swift
+//
+//  BotController_Fixed.swift
+//  LowRoller
+//
+//  Fixed version with ObservableObject conformance
+//
+
 import Foundation
 import Combine
 
-final class BotController {
+// FIX: Add ObservableObject conformance
+final class BotController: ObservableObject {
     private weak var engine: GameEngine?
     private var workItem: DispatchWorkItem?
+    
+    // Optional: Add published property if you want to track bot processing state
+    @Published private(set) var isProcessing = false
 
     init(bind engine: GameEngine) {
         self.engine = engine
+    }
+    
+    deinit {
+        // Ensure cleanup
+        workItem?.cancel()
     }
 
     /// Call this on appear and whenever turn/lastFaces change.
     func scheduleBotIfNeeded() {
         workItem?.cancel()
         guard let eng = engine else { return }
-        guard eng.state.phase != .finished else { return }
+        guard eng.state.phase != .finished else {
+            isProcessing = false
+            return
+        }
 
         let cur = eng.state.players[eng.state.turnIdx]
-        guard cur.isBot else { return }
+        guard cur.isBot else {
+            isProcessing = false
+            return
+        }
+        
+        isProcessing = true
 
         let item = DispatchWorkItem { [weak self] in
             self?.stepLoop()
@@ -27,19 +50,28 @@ final class BotController {
     }
 
     private func stepLoop() {
-        guard let eng = engine else { return }
-        guard eng.state.phase != .finished else { return }
+        guard let eng = engine else {
+            isProcessing = false
+            return
+        }
+        guard eng.state.phase != .finished else {
+            isProcessing = false
+            return
+        }
 
         let cur = eng.state.players[eng.state.turnIdx]
-        guard cur.isBot else { return }
+        guard cur.isBot else {
+            isProcessing = false
+            return
+        }
 
         // 1) If bot hasn't started this turn, roll.
         if eng.state.lastFaces.isEmpty && eng.state.remainingDice > 0 {
             eng.roll()
         } else {
-            // 2) Otherwise, let the engine decide bot picks (amateur/pro logic inside)
+            // 2) Otherwise, let the engine decide bot picks
             eng.fallbackPick()
-            // 3) End the turn when all dice are placed; may advance to next player.
+            // 3) End the turn when all dice are placed
             _ = eng.endTurnIfDone()
         }
 
@@ -52,6 +84,8 @@ final class BotController {
             let item = DispatchWorkItem { [weak self] in self?.stepLoop() }
             workItem = item
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: item)
+        } else {
+            isProcessing = false
         }
     }
 }

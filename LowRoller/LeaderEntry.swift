@@ -1,6 +1,6 @@
 // Models/LeaderboardStore.swift
 import Foundation
-import Combine   // ✅ Needed for ObservableObject / @Published
+import Combine
 
 // Single source of truth for the House NPC display name
 enum HouseNPC {
@@ -17,8 +17,6 @@ struct LeaderEntry: Codable, Identifiable, Equatable {
     var longestStreak: Int
     var currentStreak: Int
     var lastWinAt: Date?
-
-    // NEW: persistent bankroll (default $100 = 10_000 cents)
     var bankrollCents: Int = 10_000
 
     init(id: UUID = UUID(),
@@ -173,7 +171,7 @@ final class LeaderboardStore: ObservableObject {
                 longestStreak: 0,
                 currentStreak: 0,
                 lastWinAt: nil,
-                bankrollCents: EconomyStore.shared.houseCents   // ← mirror the House
+                bankrollCents: EconomyStore.shared.houseCents
             )
             list.append(house)
         }
@@ -239,9 +237,10 @@ final class LeaderboardStore: ObservableObject {
         }
     }
 
-    // MARK: - Internals
-
-    private func recordWinner(name: String, potCents: Int) {
+    // MARK: - Recording Methods (CHANGED FROM PRIVATE TO INTERNAL/PUBLIC)
+    
+    // FIX: Changed from 'private func' to just 'func' so GameView can access it
+    func recordWinner(name: String, potCents: Int) {
         let key = normalizeName(name)
         if let i = indexOfName(key) {
             entries[i].gamesWon += 1
@@ -265,7 +264,8 @@ final class LeaderboardStore: ObservableObject {
         sortAndSave()
     }
 
-    private func recordLoss(name: String) {
+    // FIX: Changed from 'private func' to just 'func' so GameView can access it
+    func recordLoss(name: String) {
         let key = normalizeName(name)
         if let i = indexOfName(key), entries[i].currentStreak != 0 {
             entries[i].currentStreak = 0
@@ -273,6 +273,8 @@ final class LeaderboardStore: ObservableObject {
         }
     }
 
+    // MARK: - Private Helper Methods (these remain private)
+    
     private func normalizeName(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "You" : trimmed
@@ -301,6 +303,7 @@ final class LeaderboardStore: ObservableObject {
     }
 
     // MARK: - Dedup / Merge Helpers (used only at init)
+    
     private func coalesce(_ list: [LeaderEntry]) -> [LeaderEntry] {
         var map: [String: LeaderEntry] = [:]  // key = lowercased name
         for e in list {
@@ -333,7 +336,7 @@ final class LeaderboardStore: ObservableObject {
             base.currentStreak = max(base.currentStreak, other.currentStreak)
         }
 
-        // NEW: bankroll—prefer the higher of the two to avoid accidental loss
+        // Bankroll—prefer the higher of the two to avoid accidental loss
         base.bankrollCents = max(base.bankrollCents, other.bankrollCents)
 
         base.lastWinAt = latest

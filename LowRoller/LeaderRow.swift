@@ -4,7 +4,8 @@ struct LeaderRow: View {
     let rank: Int
     let entry: LeaderEntry
     let metric: LeaderMetric
-    var onDelete: (() -> Void)? = nil   // ← optional trailing delete handler
+    private let startingBankroll = 10_000  // $100 in cents
+    var onDelete: (() -> Void)? = nil   // optional trailing delete handler
 
     // MARK: - Formatters
     private func currencyString(cents: Int) -> String {
@@ -35,17 +36,18 @@ struct LeaderRow: View {
     }
 
     // MARK: - Color logic (only for Current Balance)
-    private var balanceColor: Color {
-        guard metric == .balance else { return .primary }
+    private var balanceStyle: AnyShapeStyle {
+        guard metric == .balance else { return AnyShapeStyle(.primary) }
         if entry.bankrollCents < 0 {
-            return .red
-        } else if entry.bankrollCents > 10_000 { // $100 in cents
-            return .green
+            return AnyShapeStyle(Color.red)
+        } else if entry.bankrollCents > startingBankroll {
+            return AnyShapeStyle(Color.green)
         } else {
-            return .primary
+            return AnyShapeStyle(.primary) // black in light, white in dark
         }
     }
 
+    // MARK: - Body
     var body: some View {
         HStack(spacing: 12) {
             Text("\(rank).")
@@ -68,7 +70,7 @@ struct LeaderRow: View {
             Text(rightText)
                 .font(.headline)
                 .monospacedDigit()
-                .foregroundColor(balanceColor) // ✅ only affects Current Balance
+                .foregroundStyle(balanceStyle)
                 .accessibilityLabel({
                     switch metric {
                     case .dollars: return Text("Total dollars won \(rightText)")
@@ -92,7 +94,7 @@ struct LeaderRow: View {
                         .padding(.leading, 4)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless) // behaves nicely inside Form/List rows
+                .buttonStyle(.borderless)
             }
         }
         .padding(.vertical, 6)

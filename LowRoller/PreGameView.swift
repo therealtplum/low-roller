@@ -1,4 +1,3 @@
-// UI/PreGameView.swift
 import SwiftUI
 import UIKit
 import Foundation
@@ -925,6 +924,8 @@ struct EnhancedLeaderRow: View {
     
     @State private var showActions = false
     
+    private let startingBankroll = 10_000 // $100 in cents
+
     private var metricValue: String {
         switch metric {
         case .dollars:
@@ -935,6 +936,17 @@ struct EnhancedLeaderRow: View {
             return "\(entry.longestStreak) streak"
         case .balance:
             return formatCents(entry.bankrollCents)
+        }
+    }
+
+    private var valueStyle: AnyShapeStyle {
+        guard metric == .balance else { return AnyShapeStyle(.primary) }
+        if entry.bankrollCents < 0 {
+            return AnyShapeStyle(Color.red)
+        } else if entry.bankrollCents > startingBankroll {
+            return AnyShapeStyle(Color.green)
+        } else {
+            return AnyShapeStyle(.primary) // black in light, white in dark
         }
     }
     
@@ -960,8 +972,8 @@ struct EnhancedLeaderRow: View {
             // Metric value
             Text(metricValue)
                 .font(.subheadline)
-                .foregroundStyle((metric == .dollars || metric == .balance) ? .green : .primary)
                 .bold()
+                .foregroundStyle(valueStyle) // ← fixed color logic
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 4)

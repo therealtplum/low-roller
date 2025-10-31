@@ -50,7 +50,7 @@ struct PreGameView: View {
     private static func seedSeats() -> [SeatCfg] {
         var taken = Set<UUID>()
         var result: [SeatCfg] = []
-        for i in 2...8 {
+        for _ in 2...8 {
             var cfg = SeatCfg(
                 isBot: true,
                 botLevel: .pro,

@@ -1,403 +1,184 @@
-// AnalyticsExportView_ShareSheet.swift
+// AnalyticsExportView.swift
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct AnalyticsExportView: View {
-    // Change the callback to be optional - we'll use share sheet instead
+    // Optional callback for custom handling; defaults to nil so init() is valid.
     let onExportURL: ((_ url: URL, _ filename: String) -> Void)?
-    
+
     @State private var files: [URL] = []
-    @State private var errorMessage: String? = nil
-    @State private var successMessage: String? = nil
-    @State private var isMerging = false
+    @State private var errorMessage: String?
     @State private var isProcessing = false
-    
-    // Share sheet state
-    @State private var shareItem: ShareItem? = nil
+
+    // Share sheet
+    @State private var shareItem: URL?
     @State private var showShareSheet = false
-    
+
+    init(onExportURL: ((_ url: URL, _ filename: String) -> Void)? = nil) {
+        self.onExportURL = onExportURL
+    }
+
     var body: some View {
         List {
-            // Status Section
-            if let successMessage = successMessage {
-                Section {
-                    Label(successMessage, systemImage: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                }
-            }
-            
-            // Files Section
-            Section {
+            Section("Log Files") {
                 if files.isEmpty {
-                    Text("No logs found yet. Play a game to generate events.")
-                        .foregroundStyle(.secondary)
+                    ContentUnavailableView("No logs yet", systemImage: "doc.text.fill", description: Text("Play a game or toggle analytics to generate events."))
                 } else {
                     ForEach(files, id: \.self) { url in
                         HStack {
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: 4) {
                                 Text(url.lastPathComponent)
-                                    .font(.body.weight(.semibold))
-                                    .lineLimit(1)
-                                
+                                    .font(.subheadline.bold())
                                 Text(fileSizeString(url))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
-                            
-                            Spacer(minLength: 8)
-                            
-                            Button("Share") {
-                                shareFile(url)
+                            Spacer()
+                            Button {
+                                share(url)
+                            } label: {
+                                Image(systemName: "square.and.arrow.up")
                             }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(isProcessing)
+                            .buttonStyle(.bordered)
                         }
                     }
                 }
-            } header: {
-                Text("Event Logs (\(files.count) files)")
-            } footer: {
-                Text("Tap Share to export via AirDrop, Files, or other apps")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
-            
-            // Merge Section
-            if files.count >= 2 {
-                Section {
-                    Button(action: mergeAndShare) {
-                        HStack {
-                            if isMerging {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle())
-                                    .scaleEffect(0.8)
-                                Text("Merging...")
-                            } else {
-                                Image(systemName: "arrow.triangle.merge")
-                                Text("Merge & Share All")
-                            }
-                        }
-                    }
-                    .disabled(isMerging || isProcessing)
-                } footer: {
-                    Text("Combines all log files into a single JSON array")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            
-            // Actions Section
+
             Section("Actions") {
-                Button(action: flushLogs) {
-                    HStack {
-                        Image(systemName: "arrow.down.doc")
-                        Text("Flush Logs to Disk")
-                    }
+                Button {
+                    flushLogs()
+                } label: {
+                    Label("Flush Logs to Disk", systemImage: "arrow.down.doc")
                 }
                 .disabled(isProcessing)
-                
-                Button(action: refreshFileList) {
-                    HStack {
-                        Image(systemName: "arrow.clockwise")
-                        Text("Refresh File List")
-                    }
+
+                Button {
+                    refreshFiles()
+                } label: {
+                    Label("Refresh List", systemImage: "arrow.clockwise")
                 }
                 .disabled(isProcessing)
-                
-                #if DEBUG
-                Button(action: createTestEvent) {
-                    HStack {
-                        Image(systemName: "plus.circle")
-                        Text("Create Test Event")
-                    }
+
+                Button {
+                    Task { await mergeAndShareAll() }
+                } label: {
+                    Label("Merge All & Share (.json)", systemImage: "doc.richtext")
                 }
-                .foregroundColor(.orange)
-                .disabled(isProcessing)
-                #endif
+                .disabled(isProcessing || files.isEmpty)
             }
-            
-            // Debug Info Section
-            #if DEBUG
-            Section("Debug Info") {
-                if let firstFile = files.first {
-                    Text("First file path:")
-                        .font(.caption)
-                    Text(firstFile.path)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    
-                    Button("Test Direct Share") {
-                        testDirectShare()
-                    }
-                }
-            }
-            #endif
         }
         .navigationTitle("Analytics Export")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            refreshFileList()
+            // Defer to next runloop so any singleton init has completed.
+            DispatchQueue.main.async {
+                refreshFiles()
+            }
         }
         .alert("Error", isPresented: .constant(errorMessage != nil)) {
-            Button("OK") {
-                errorMessage = nil
-            }
+            Button("OK") { errorMessage = nil }
         } message: {
-            if let errorMessage = errorMessage {
-                Text(errorMessage)
-            }
+            if let errorMessage { Text(errorMessage) }
         }
         .sheet(isPresented: $showShareSheet) {
-            if let shareItem = shareItem {
-                ActivityView(activityItems: [shareItem.url])
-                    .presentationDetents([.medium, .large])
+            if let shareItem {
+                ShareView(activityItems: [shareItem])
             }
         }
     }
-    
-    // MARK: - Share Functions
-    
-    private func shareFile(_ url: URL) {
+
+    // MARK: - Actions
+
+    private func refreshFiles() {
         isProcessing = true
-        
-        // Ensure logs are flushed
+        // Make sure anything buffered is flushed before listing
         AnalyticsLogger.shared.flush()
-        
-        Task {
-            do {
-                // Create a copy with .json extension for better compatibility
-                let tmpDir = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("AnalyticsShare", isDirectory: true)
-                
-                try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-                
-                let baseName = url.deletingPathExtension().lastPathComponent
-                let jsonURL = tmpDir.appendingPathComponent("\(baseName).json")
-                
-                // Remove if exists
-                try? FileManager.default.removeItem(at: jsonURL)
-                
-                // Copy with new extension
-                try FileManager.default.copyItem(at: url, to: jsonURL)
-                
-                await MainActor.run {
-                    self.shareItem = ShareItem(url: jsonURL, filename: "\(baseName).json")
-                    self.showShareSheet = true
-                    self.isProcessing = false
-                    self.successMessage = "Ready to share"
-                }
-            } catch {
-                await MainActor.run {
-                    self.errorMessage = "Failed to prepare file: \(error.localizedDescription)"
-                    self.isProcessing = false
-                }
-            }
-        }
+        files = AnalyticsLogger.shared.allLocalLogFiles()
+        isProcessing = false
     }
-    
-    private func mergeAndShare() {
-        guard !files.isEmpty else { return }
-        
-        isMerging = true
-        isProcessing = true
-        
-        Task {
-            do {
-                let mergedURL = try await performMerge(files: files)
-                
-                await MainActor.run {
-                    self.shareItem = ShareItem(url: mergedURL, filename: "analytics_merged.json")
-                    self.showShareSheet = true
-                    self.isMerging = false
-                    self.isProcessing = false
-                    self.successMessage = "Ready to share merged file"
-                }
-            } catch {
-                await MainActor.run {
-                    self.errorMessage = "Merge failed: \(error.localizedDescription)"
-                    self.isMerging = false
-                    self.isProcessing = false
-                }
-            }
-        }
-    }
-    
-    private func testDirectShare() {
-        // Create a simple test file
-        let testContent = """
-        {"test": true, "timestamp": "\(Date.now.ISO8601Format())", "message": "Direct share test"}
-        """
-        
-        let tmpURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_share.json")
-        
-        do {
-            try testContent.write(to: tmpURL, atomically: true, encoding: .utf8)
-            shareItem = ShareItem(url: tmpURL, filename: "test_share.json")
-            showShareSheet = true
-            successMessage = "Test file created and sharing"
-        } catch {
-            errorMessage = "Test failed: \(error.localizedDescription)"
-        }
-    }
-    
-    // MARK: - Original Actions
-    
+
     private func flushLogs() {
         isProcessing = true
-        successMessage = nil
-        
-        DispatchQueue.main.async {
-            AnalyticsLogger.shared.flush()
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                self.refreshFileList()
-                self.successMessage = "Logs flushed successfully"
-                self.isProcessing = false
-                
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                    self.successMessage = nil
-                }
-            }
+        AnalyticsLogger.shared.flush()
+        // quick bounce to show updated sizes
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            refreshFiles()
         }
     }
-    
-    private func refreshFileList() {
-        files = AnalyticsLogger.shared.allLocalLogFiles()
-        successMessage = "Found \(files.count) log file(s)"
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            successMessage = nil
+
+    private func share(_ url: URL) {
+        // If the caller provided a hook, use it
+        if let onExportURL {
+            onExportURL(url, url.lastPathComponent)
+            return
         }
+        // Otherwise present the system share sheet
+        shareItem = url
+        showShareSheet = true
     }
-    
-    private func createTestEvent() {
-        let testEvent = AnalyticsEvent(
-            type: "test_event",
-            payload: [
-                "timestamp": .string(ISO8601DateFormatter().string(from: Date())),
-                "random": .int(Int.random(in: 1...100)),
-                "message": .string("Test event from export view")
-            ]
-        )
-        
-        AnalyticsLogger.shared.log(testEvent)
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            AnalyticsLogger.shared.flush()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                self.refreshFileList()
-            }
-        }
-    }
-    
-    private func performMerge(files: [URL]) async throws -> URL {
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AnalyticsShare", isDirectory: true)
-        
-        try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        
-        let mergedURL = tmpDir.appendingPathComponent("analytics_merged.json")
-        
-        // Remove if exists
-        try? FileManager.default.removeItem(at: mergedURL)
-        
-        // Create output file
-        FileManager.default.createFile(atPath: mergedURL.path, contents: nil, attributes: nil)
-        
-        let outHandle = try FileHandle(forWritingTo: mergedURL)
-        defer { try? outHandle.close() }
-        
-        // Write opening bracket
-        try outHandle.write(contentsOf: Data("[\n".utf8))
-        
-        var isFirstEntry = true
-        
-        for fileURL in files {
-            guard let inHandle = try? FileHandle(forReadingFrom: fileURL) else { continue }
-            defer { try? inHandle.close() }
-            
-            // Read file line by line
-            if let data = try? inHandle.readToEnd() {
-                let lines = data.split(separator: 0x0A) // newline
-                
-                for line in lines {
-                    if !line.isEmpty {
-                        if !isFirstEntry {
-                            try outHandle.write(contentsOf: Data(",\n".utf8))
-                        }
-                        try outHandle.write(contentsOf: Data(line))
-                        isFirstEntry = false
-                    }
-                }
-            }
-        }
-        
-        // Write closing bracket
-        try outHandle.write(contentsOf: Data("\n]".utf8))
-        
-        return mergedURL
-    }
-    
+
     private func fileSizeString(_ url: URL) -> String {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let fileSize = attributes[.size] as? NSNumber else {
-            return "Unknown size"
+        let b = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        let kb = Double(b) / 1024.0
+        if kb < 1024 { return String(format: "%.0f KB", kb) }
+        return String(format: "%.2f MB", kb / 1024.0)
+    }
+
+    private func uniqueTempFile(_ name: String) -> URL {
+        let ts = Int(Date().timeIntervalSince1970)
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent("Analytics-\(ts)-\(name)")
+    }
+
+    private func makeMergedJSON(from files: [URL]) throws -> URL {
+        let outURL = uniqueTempFile("merged.json")
+        let fm = FileManager.default
+        fm.createFile(atPath: outURL.path, contents: Data("{\n\"events\": [\n".utf8))
+
+        guard let outHandle = try? FileHandle(forWritingTo: outURL) else {
+            throw NSError(domain: "AnalyticsExport", code: 1, userInfo: [NSLocalizedDescriptionKey: "Cannot open output file."])
         }
-        
-        let bytes = fileSize.int64Value
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: bytes)
-    }
-}
+        defer { try? outHandle.close() }
 
-// MARK: - Share Item
-struct ShareItem {
-    let url: URL
-    let filename: String
-}
+        var isFirst = true
 
-// MARK: - Activity View Controller
-struct ActivityView: UIViewControllerRepresentable {
-    let activityItems: [Any]
-    
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(
-            activityItems: activityItems,
-            applicationActivities: nil
-        )
-        
-        // Exclude irrelevant activities
-        controller.excludedActivityTypes = [
-            .addToReadingList,
-            .assignToContact,
-            .openInIBooks,
-            .postToFacebook,
-            .postToTwitter,
-            .postToWeibo,
-            .postToFlickr,
-            .postToVimeo,
-            .postToTencentWeibo
-        ]
-        
-        return controller
-    }
-    
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
-        // Nothing to update
-    }
-}
+        for fileURL in files {
+            guard let inHandle = try? FileHandle(forReadingFrom: fileURL),
+                  let data = try? inHandle.readToEnd()
+            else { continue }
+            try? inHandle.close()
 
-// MARK: - Alternative: Simple Copy to Clipboard
-extension AnalyticsExportView {
-    private func copyFileContentsToClipboard(_ url: URL) {
+            for line in data.split(separator: 0x0A) where !line.isEmpty {
+                if !isFirst { try outHandle.write(contentsOf: Data(",\n".utf8)) }
+                try outHandle.write(contentsOf: line)
+                isFirst = false
+            }
+        }
+
+        try outHandle.write(contentsOf: Data("\n]\n}\n".utf8))
+        return outURL
+    }
+
+    private func mergeAndShareAll() async {
+        isProcessing = true
+        AnalyticsLogger.shared.flush()
+        let urls = AnalyticsLogger.shared.allLocalLogFiles()
         do {
-            let contents = try String(contentsOf: url, encoding: .utf8)
-            UIPasteboard.general.string = contents
-            successMessage = "Copied to clipboard!"
+            let merged = try makeMergedJSON(from: urls)
+            share(merged)
         } catch {
-            errorMessage = "Failed to read file: \(error.localizedDescription)"
+            errorMessage = error.localizedDescription
         }
+        isProcessing = false
     }
+}
+
+// MARK: - UIActivityViewController wrapper
+private struct ShareView: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

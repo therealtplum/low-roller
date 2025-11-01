@@ -1,122 +1,67 @@
-// AnalyticsEvent.swift
+//
+//  AnalyticsEvent.swift
+//
+
 import Foundation
 
-public struct AnalyticsEvent: Codable {
-    public let ts: Date
-    public let type: String
-    public let installId: String
-    public let sessionId: String
-    public let appVersion: String
-    public let buildNumber: String
-    public let payload: [String: CodableValue]
-    
-    public init(type: String, payload: [String: CodableValue]) {
-        self.ts = Date()
-        self.type = type
-        self.installId = InstallId.shared.id
-        self.sessionId = SessionId.shared.id
-        self.appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
-        self.buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
-        self.payload = payload
+/// Simple helpers to build consistent JSON-able dictionaries.
+/// We intentionally use [String: Any] and JSONSerialization for .jsonl output.
+public enum AnalyticsEvent {
+    static func base(
+        type: String,
+        payload: [String: Any] = [:],
+        bypassGate: Bool = false
+    ) -> [String: Any] {
+        var dict: [String: Any] = [
+            "installId": DeviceIdentity.installId,
+            "buildNumber": AppIdentity.buildNumber,
+            "appVersion": AppIdentity.appVersion,
+            "sessionId": SessionIdentity.shared.sessionId,
+            "ts": ISO8601DateFormatter.analytics.string(from: Date()),
+            "type": type,
+            "payload": payload
+        ]
+        if bypassGate {
+            // mark lines that are allowed to log even if disabled
+            dict["_bypassGate"] = true
+        }
+        return dict
     }
 }
 
-public enum CodableValue: Codable {
-    case string(String)
-    case int(Int)
-    case double(Double)
-    case bool(Bool)
-    case array([CodableValue])
-    case object([String: CodableValue])
-    case `null`
-    
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        
-        if container.decodeNil() {
-            self = .null
-            return
-        }
-        
-        if let value = try? container.decode(Bool.self) {
-            self = .bool(value)
-            return
-        }
-        
-        if let value = try? container.decode(Int.self) {
-            self = .int(value)
-            return
-        }
-        
-        if let value = try? container.decode(Double.self) {
-            self = .double(value)
-            return
-        }
-        
-        if let value = try? container.decode(String.self) {
-            self = .string(value)
-            return
-        }
-        
-        if let value = try? container.decode([String: CodableValue].self) {
-            self = .object(value)
-            return
-        }
-        
-        if let value = try? container.decode([CodableValue].self) {
-            self = .array(value)
-            return
-        }
-        
-        throw DecodingError.typeMismatch(
-            CodableValue.self,
-            DecodingError.Context(
-                codingPath: decoder.codingPath,
-                debugDescription: "Unsupported type"
-            )
-        )
+/// Common identity helpers
+enum AppIdentity {
+    static var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
     }
-    
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        
-        switch self {
-        case .null:
-            try container.encodeNil()
-        case .bool(let value):
-            try container.encode(value)
-        case .int(let value):
-            try container.encode(value)
-        case .double(let value):
-            try container.encode(value)
-        case .string(let value):
-            try container.encode(value)
-        case .array(let value):
-            try container.encode(value)
-        case .object(let value):
-            try container.encode(value)
-        }
+    static var buildNumber: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
     }
 }
 
-public final class InstallId {
-    public static let shared = InstallId()
-    public let id: String
-    
-    private init() {
-        let key = "analytics.install.id.v1"
-        if let existing = UserDefaults.standard.string(forKey: key) {
-            self.id = existing
-        } else {
-            let newId = UUID().uuidString
-            UserDefaults.standard.set(newId, forKey: key)
-            self.id = newId
+enum DeviceIdentity {
+    private static let installIdKey = "analytics.installId.v1"
+    static var installId: String = {
+        let ud = UserDefaults.standard
+        if let existing = ud.string(forKey: installIdKey) {
+            return existing
         }
-    }
+        let id = UUID().uuidString.uppercased()
+        ud.set(id, forKey: installIdKey)
+        return id
+    }()
 }
 
-public final class SessionId {
-    public static let shared = SessionId()
-    public let id: String = UUID().uuidString
-    private init() {}
+final class SessionIdentity {
+    static let shared = SessionIdentity()
+    let sessionId: String
+    private init() { sessionId = UUID().uuidString.uppercased() }
+}
+
+extension ISO8601DateFormatter {
+    static let analytics: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
 }

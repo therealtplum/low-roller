@@ -25,6 +25,9 @@ struct GameView: View {
     @State private var isSuddenRolling = false
     @State private var suddenRollToken = 0
 
+    /// Debounce UI actions so the same engine call can't fire twice quickly.
+    @State private var isActionBusy = false
+
     // MARK: - Haptics
     private let lightImpact = UIImpactFeedbackGenerator(style: .light)
     private let mediumImpact = UIImpactFeedbackGenerator(style: .medium)
@@ -343,11 +346,12 @@ struct GameView: View {
             .shadow(color: Color.blue.opacity(0.3), radius: 8, y: 4)
         }
         .scaleEffect(rollButtonScale)
-        .disabled(!canRoll || currentPlayer?.isBot ?? false)
+        .disabled(!canRoll || (currentPlayer?.isBot ?? false) || isActionBusy)
         .gesture(
             DragGesture(minimumDistance: 30)
                 .onEnded { value in
-                    if value.translation.height < -30 && canRoll && !(currentPlayer?.isBot ?? false) {
+                    if value.translation.height < -30 && canRoll &&
+                        !(currentPlayer?.isBot ?? false) && !isActionBusy {
                         rollDice()
                     }
                 }
@@ -383,7 +387,7 @@ struct GameView: View {
             )
             .shadow(color: Color.green.opacity(0.3), radius: 8, y: 4)
         }
-        .disabled(selectedDice.isEmpty || currentPlayer?.isBot ?? false)
+        .disabled(selectedDice.isEmpty || (currentPlayer?.isBot ?? false) || isActionBusy)
         .animation(.spring(), value: selectedDice.isEmpty)
     }
 
@@ -433,6 +437,9 @@ struct GameView: View {
 
     // MARK: - Actions
     private func rollDice() {
+        guard !isActionBusy else { return }
+        isActionBusy = true
+
         mediumImpact.prepare()
         withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
             rollButtonScale = 0.9
@@ -444,6 +451,12 @@ struct GameView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             withAnimation(.spring()) { rollButtonScale = 1.0 }
         }
+
+        // Short busy window to prevent accidental double taps / drag + tap overlap
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
+            isActionBusy = false
+        }
+
         resetTimer()
     }
 
@@ -477,6 +490,9 @@ struct GameView: View {
 
     private func pickSelectedDice() {
         guard !selectedDice.isEmpty else { return }
+        guard !isActionBusy else { return }
+        isActionBusy = true
+
         notificationFeedback.prepare()
 
         let indices = Array(selectedDice).sorted()
@@ -486,6 +502,12 @@ struct GameView: View {
             selectedDice.removeAll()
         }
         notificationFeedback.notificationOccurred(.success)
+
+        // Short busy window
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
+            isActionBusy = false
+        }
+
         resetTimer()
     }
 
@@ -550,6 +572,7 @@ struct GameView: View {
                 handleTimeout()
             }
         }
+        RunLoop.main.add(timer!, forMode: .common)
     }
 
     private func resetTimer() {
@@ -566,16 +589,21 @@ struct GameView: View {
     private func handleMatchEnd(humanWon: Bool) {
         timer?.invalidate()
 
-        if humanWon {
-            showConfetti = true
-            notificationFeedback.notificationOccurred(.success)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                showConfetti = false
+        // Slight delay gives the UI a moment to reveal final dice before confetti.
+        let delay: TimeInterval = humanWon ? 0.35 : 0.0
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            if humanWon {
+                showConfetti = true
+                notificationFeedback.notificationOccurred(.success)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                    showConfetti = false
+                }
+            } else {
+                notificationFeedback.notificationOccurred(.error)
             }
-        } else {
-            notificationFeedback.notificationOccurred(.error)
+            updateLeaderboard()
         }
-        updateLeaderboard()
     }
 
     private func updateLeaderboard() {

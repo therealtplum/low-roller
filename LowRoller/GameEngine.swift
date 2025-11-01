@@ -18,7 +18,7 @@ final class GameEngine: ObservableObject {
 
     // MARK: - Init
 
-    /// Main initializer — hydrates bankrolls from the leaderboard entries (if provided).
+    /// Main initializer – hydrates bankrolls from the leaderboard entries (if provided).
     init(players: [Player], youStart: Bool, leaders: LeaderboardStore) {
         var hydrated = players
         // Hydrate each player's bankroll from the leaderboard, if present
@@ -35,7 +35,7 @@ final class GameEngine: ObservableObject {
         s.turnIdx = youStart ? 0 : Int.random(in: 0..<hydrated.count, using: &rng)
         self.state = s
 
-        // If it’s a 1v1 and wagers match, remember the base wager for double-or-nothing
+        // If it's a 1v1 and wagers match, remember the base wager for double-or-nothing
         if hydrated.count == 2 && hydrated[0].wagerCents == hydrated[1].wagerCents {
             self.state.baseWagerCentsPerPlayer = hydrated[0].wagerCents
         } else if let first = hydrated.first {
@@ -72,6 +72,13 @@ final class GameEngine: ObservableObject {
         // EV per die for {1,2,0,4,5,6} is 3.0
         guard count > 0 else { return 0 }
         return Double(count) * 3.0
+    }
+
+    /// Safe display name helper for analytics
+    private func displayName(_ i: Int) -> String {
+        guard i >= 0 && i < state.players.count else { return "Player\(i)" }
+        let d = state.players[i].display.trimmingCharacters(in: .whitespacesAndNewlines)
+        return d.isEmpty ? "You" : d
     }
 
     // MARK: - Public actions
@@ -161,7 +168,7 @@ final class GameEngine: ObservableObject {
 
     // MARK: - Double or Nothing
 
-    /// Only 1v1, human vs bot, and the human lost — and only once per match.
+    /// Only 1v1, human vs bot, and the human lost – and only once per match.
     private func shouldOfferDoubleNow() -> Bool {
         guard state.doubleCount == 0 else { return false }
         guard state.players.count == 2, let w = state.winnerIdx else { return false }
@@ -182,15 +189,34 @@ final class GameEngine: ObservableObject {
 
         state.doubleCount += 1
 
-        // Both players match the original base wager again
-        let wager = state.baseWagerCentsPerPlayer
-        for i in state.players.indices { state.players[i].bankrollCents -= wager }
-        state.potCents += 2 * wager
+        // Each player contributes their original wager amount again
+        for i in state.players.indices {
+            let originalWager = state.players[i].wagerCents
+            let oldBankroll = state.players[i].bankrollCents
+            state.players[i].bankrollCents -= originalWager
+
+            // Analytics: record the second contribution for Double or Nothing (player-only)
+            Log.bankDebited(player: displayName(i), amountCents: originalWager, reason: "double_or_nothing")
+
+            // If player went negative, charge 20% penalty to the House
+            if oldBankroll >= 0 && state.players[i].bankrollCents < 0 {
+                let borrowedAmount = abs(state.players[i].bankrollCents)
+                let penalty = Int(Double(borrowedAmount) * 0.20)
+
+                // Centralized logging happens inside EconomyStore (no extra Log.* here)
+                EconomyStore.shared.recordBorrowPenalty(playerName: displayName(i), cents: penalty)
+
+                // Apply penalty to player's bankroll after logging
+                state.players[i].bankrollCents -= penalty
+            }
+
+            state.potCents += originalWager
+        }
 
         // Reset the round
         resetForNewRound()
 
-        // Let the next turn start (you can keep "winner+1" or pick loser to start — this keeps winner+1)
+        // Let the next turn start (this keeps winner+1)
         state.turnIdx = (winner + 1) % state.players.count
     }
 
@@ -281,7 +307,7 @@ final class GameEngine: ObservableObject {
 
         if let t = target {
             let scoreNeeded = t - currentScore - 1
-            let _ = expectedScoreFromDice(count: state.remainingDice - faces.count)
+            _ = expectedScoreFromDice(count: state.remainingDice - faces.count)
 
             if scoreNeeded < 0 {
                 // Already beating target → play safe
@@ -310,7 +336,7 @@ final class GameEngine: ObservableObject {
         }
     }
 
-    /// Kept for BotController compatibility — uses smartPick.
+    /// Kept for BotController compatibility – uses smartPick.
     func fallbackPick() {
         guard !isFinished,
               state.phase == .normal,
@@ -324,7 +350,24 @@ final class GameEngine: ObservableObject {
         var pot = 0
         for i in state.players.indices {
             let wager = state.players[i].wagerCents
+            let oldBankroll = state.players[i].bankrollCents
             state.players[i].bankrollCents -= wager
+
+            // Player buy-in (to pot) — log player debit only
+            Log.bankDebited(player: displayName(i), amountCents: wager, reason: "buy_in")
+
+            // If player went negative, charge 20% penalty to the House
+            if oldBankroll >= 0 && state.players[i].bankrollCents < 0 {
+                let borrowedAmount = abs(state.players[i].bankrollCents)
+                let penalty = Int(Double(borrowedAmount) * 0.20)
+
+                // Centralized logging happens inside EconomyStore (no extra Log.* here)
+                EconomyStore.shared.recordBorrowPenalty(playerName: displayName(i), cents: penalty)
+
+                // Apply penalty to player's bankroll after logging
+                state.players[i].bankrollCents -= penalty
+            }
+
             pot += wager
         }
         state.potCents = pot
@@ -348,11 +391,18 @@ final class GameEngine: ObservableObject {
     }
 
     private func finalizeAndNotify() {
+        // Prevent double-finalization (e.g., two quick calls from UI/animation path)
+        guard state.phase != .finished else { return }
         guard let w = state.winnerIdx else { return }
 
-        // Winner takes the pot
-        state.players[w].bankrollCents += state.potCents
+        // Mark finished first to block re-entry
         state.phase = .finished
+
+        // Winner takes the pot (pot was built from player wagers; House not involved here)
+        state.players[w].bankrollCents += state.potCents
+
+        // Analytics: winner payout (player credit only; no house debit in this model)
+        Log.bankCredited(player: displayName(w), amountCents: state.potCents, reason: "match_win")
 
         // Let the UI know if a human won (confetti)
         let humanWon = !state.players[w].isBot

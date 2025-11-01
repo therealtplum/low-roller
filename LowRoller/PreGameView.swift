@@ -1056,7 +1056,6 @@ struct AboutSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var tab: Tab = .rules
     @State private var appearAnimation = false
-
     @AppStorage("analytics.enabled.v1") private var analyticsOn: Bool = true
 
     private var appVersion: String {
@@ -1066,6 +1065,121 @@ struct AboutSheet: View {
         if let v { return v }
         if let b { return "(\(b))" }
         return "—"
+    }
+
+    // Split out content so #if DEBUG doesn't break if/else chains
+    @ViewBuilder
+    private var tabContent: some View {
+        switch tab {
+        case .rules:
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    GameRulesView()
+                }
+                .padding()
+                .opacity(appearAnimation ? 1 : 0)
+                .animation(.easeOut(duration: 0.3), value: appearAnimation)
+            }
+
+        case .about:
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // App info card
+                    VStack(alignment: .center, spacing: 16) {
+                        Image(systemName: "dice.fill")
+                            .font(.system(size: 56))
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [.blue, .purple],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .scaleEffect(appearAnimation ? 1 : 0.5)
+                            .animation(.spring(response: 0.5, dampingFraction: 0.6), value: appearAnimation)
+
+                        Text("Low Roller")
+                            .font(.title.bold())
+
+                        if appVersion != "—" {
+                            Text("Version \(appVersion)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 20)
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("A minimalist dice game built in SwiftUI")
+                            .font(.body)
+                        Text("Created by Thomas Plummer")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Link(destination: URL(string: "https://github.com/therealtplum/low-roller")!) {
+                            HStack {
+                                Label("View on GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
+                                Spacer()
+                                Image(systemName: "arrow.up.right.square").foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+
+                        Link(destination: URL(string: "https://github.com/therealtplum")!) {
+                            HStack {
+                                Label("Follow @therealtplum", systemImage: "person.circle")
+                                Spacer()
+                                Image(systemName: "arrow.up.right.square").foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.top)
+                }
+                .padding()
+                .opacity(appearAnimation ? 1 : 0)
+                .animation(.easeOut(duration: 0.3).delay(0.1), value: appearAnimation)
+            }
+
+        #if DEBUG
+        case .settings:
+            NavigationStack {
+                List {
+                    Section {
+                        Toggle(isOn: $analyticsOn) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Enable Analytics")
+                                Text("Write lightweight JSONL event logs on-device")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .onChange(of: analyticsOn) { _, newVal in
+                            AnalyticsSwitch.enabled = newVal
+                        }
+
+                        NavigationLink("Export Event Logs") {
+                            AnalyticsExportView()
+                        }
+                    } header: {
+                        Text("Analytics")
+                    } footer: {
+                        Text("Export logs via Share Sheet to Files, AirDrop, or other apps.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .onAppear {
+                    AnalyticsSwitch.enabled = analyticsOn
+                }
+            }
+        #endif
+        }
     }
 
     var body: some View {
@@ -1083,7 +1197,7 @@ struct AboutSheet: View {
                                 Text(t.rawValue)
                                     .font(.subheadline.bold())
                                     .foregroundColor(tab == t ? .primary : .secondary)
-                                
+
                                 RoundedRectangle(cornerRadius: 2)
                                     .fill(tab == t ? Color.blue : Color.clear)
                                     .frame(height: 3)
@@ -1094,144 +1208,26 @@ struct AboutSheet: View {
                 }
                 .padding(.horizontal)
                 .padding(.top)
-                
+
                 Divider()
                     .padding(.top, 8)
 
-                Group {
-                    switch tab {
-                    case .rules:
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 16) {
-                                GameRulesView()
-                            }
-                            .padding()
-                            .opacity(appearAnimation ? 1 : 0)
-                            .animation(.easeOut(duration: 0.3), value: appearAnimation)
-                        }
-                        
-                    case .about:
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 20) {
-                                // App info card
-                                VStack(alignment: .center, spacing: 16) {
-                                    Image(systemName: "dice.fill")
-                                        .font(.system(size: 56))
-                                        .foregroundStyle(
-                                            LinearGradient(
-                                                colors: [.blue, .purple],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            )
-                                        )
-                                        .scaleEffect(appearAnimation ? 1 : 0.5)
-                                        .animation(.spring(response: 0.5, dampingFraction: 0.6), value: appearAnimation)
-                                    
-                                    Text("Low Roller")
-                                        .font(.title.bold())
-                                    
-                                    if appVersion != "—" {
-                                        Text("Version \(appVersion)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 20)
-                                
-                                Divider()
-                                
-                                VStack(alignment: .leading, spacing: 12) {
-                                    Text("A minimalist dice game built in SwiftUI")
-                                        .font(.body)
-                                    
-                                    Text("Created by Thomas Plummer")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                
-                                VStack(alignment: .leading, spacing: 12) {
-                                    Link(destination: URL(string: "https://github.com/therealtplum/low-roller")!) {
-                                        HStack {
-                                            Label("View on GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
-                                            Spacer()
-                                            Image(systemName: "arrow.up.right.square")
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    .buttonStyle(.bordered)
-                                    
-                                    Link(destination: URL(string: "https://github.com/therealtplum")!) {
-                                        HStack {
-                                            Label("Follow @therealtplum", systemImage: "person.circle")
-                                            Spacer()
-                                            Image(systemName: "arrow.up.right.square")
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    .buttonStyle(.bordered)
-                                }
-                                .padding(.top)
-                            }
-                            .padding()
-                            .opacity(appearAnimation ? 1 : 0)
-                            .animation(.easeOut(duration: 0.3).delay(0.1), value: appearAnimation)
-                        }
-                        
-                    #if DEBUG
-                    case .settings:
-                        NavigationStack {
-                            List {
-                                Section {
-                                    Toggle(isOn: $analyticsOn) {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text("Enable Analytics")
-                                            Text("Write lightweight JSONL event logs on-device")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    .onChange(of: analyticsOn) { _, newVal in
-                                        AnalyticsSwitch.enabled = newVal
-                                    }
-
-                                    NavigationLink("Export Event Logs") {
-                                        AnalyticsExportView(onExportURL: nil)
-                                    }
-                                } header: {
-                                    Text("Analytics")
-                                } footer: {
-                                    Text("Export logs via Share Sheet to Files, AirDrop, or other apps.")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .onAppear {
-                                AnalyticsSwitch.enabled = analyticsOn
-                            }
-                        }
-                    #endif
-                    }
-                }
-                .animation(.easeInOut(duration: 0.2), value: tab)
+                tabContent
+                    .animation(.easeInOut(duration: 0.2), value: tab)
             }
             .navigationTitle("Information")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                    .font(.body.bold())
+                    Button("Done") { dismiss() }
+                        .font(.body.bold())
                 }
             }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .onAppear {
-            withAnimation {
-                appearAnimation = true
-            }
+            withAnimation { appearAnimation = true }
         }
     }
 }

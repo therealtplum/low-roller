@@ -84,7 +84,7 @@ final class EconomyStore: ObservableObject {
         bus.emit(.bank_posted, matchId: matchIdString, body: payload)
     }
 
-    // MARK: - House mutations
+    // MARK: - House mutations (production)
 
     func creditHouse(_ cents: Int,
                      reason: String,
@@ -95,7 +95,7 @@ final class EconomyStore: ObservableObject {
         guard cents > 0 else { return }
         houseCents &+= cents
 
-        // Legacy (only if we have a concrete match UUID to avoid deprecation)
+        // Legacy echo (only with concrete UUID)
         if let mid = matchId,
            shouldEmitLegacy(type: "house_credited", player: nil, reason: reason, amountCents: cents, matchId: mid) {
             Log.houseCredited(amountCents: cents, reason: reason, matchId: mid)
@@ -117,18 +117,20 @@ final class EconomyStore: ObservableObject {
         guard cents > 0 else { return }
         houseCents &-= cents
 
+        // Legacy echo (only with concrete UUID)
         if let mid = matchId,
            shouldEmitLegacy(type: "house_debited", player: nil, reason: reason, amountCents: cents, matchId: mid) {
             Log.houseDebited(amountCents: cents, reason: reason, matchId: mid)
         }
 
+        // EventBus
         if let m = matchIdString {
             let j = journalId ?? newJournalId()
             post(matchIdString: m, journalId: j, account: houseAccount, direction: "debit", amountCents: cents, reason: reason)
         }
     }
 
-    // MARK: - High-level economic events
+    // MARK: - High-level economic events (production)
 
     func recordBorrowPenalty(playerName: String?,
                              cents: Int,
@@ -157,8 +159,10 @@ final class EconomyStore: ObservableObject {
         guard amountCents > 0 else { return }
         let j = newJournalId()
 
+        // House pays out of pot
         debitHouse(amountCents, reason: "match_payout", matchId: matchId, journalId: j, matchIdString: matchIdString, houseAccount: "house:pot")
 
+        // Winner receives credit
         if shouldEmitLegacy(type: "bank_credited", player: winnerName, reason: "match_win", amountCents: amountCents, matchId: matchId) {
             Log.bankCredited(player: winnerName, amountCents: amountCents, reason: "match_win", matchId: matchId)
         }
@@ -173,6 +177,7 @@ final class EconomyStore: ObservableObject {
         guard amountCents > 0 else { return }
         let j = journalId ?? newJournalId()
 
+        // Player pays in; House pot grows
         creditHouse(amountCents, reason: "buy_in", matchId: matchId, journalId: j, matchIdString: matchIdString, houseAccount: "house:pot")
 
         if let mid = matchId,
@@ -184,6 +189,10 @@ final class EconomyStore: ObservableObject {
         }
     }
 
+    // MARK: - Dev/utility helpers (DEBUG only, silenced for Periphery)
+
+    #if DEBUG
+    // periphery:ignore
     func recordBuyInsBatch(players: [(name: String, cents: Int)],
                            matchId: UUID? = nil,
                            matchIdString: String) {
@@ -193,6 +202,8 @@ final class EconomyStore: ObservableObject {
         }
     }
 
+    // periphery:ignore
+    @discardableResult
     func collectRake(fromPotCents pot: Int,
                      pct: Double,
                      matchId: UUID? = nil,
@@ -201,19 +212,20 @@ final class EconomyStore: ObservableObject {
         guard rake > 0 else { return 0 }
         let j = newJournalId()
 
+        // Move rake from pot bucket to rake bucket (house-internal transfer)
         debitHouse(rake, reason: "rake", matchId: matchId, journalId: j, matchIdString: matchIdString, houseAccount: "house:pot")
         creditHouse(rake, reason: "rake", matchId: matchId, journalId: j, matchIdString: matchIdString, houseAccount: "house:rake")
         return rake
     }
 
+    // periphery:ignore
     func resetHouse() {
         let old = houseCents
         houseCents = 0
         Log.write(type: "house_reset", payload: ["previousCents": old])
     }
 
-    // MARK: - UI helper
-
+    // periphery:ignore
     func formattedHouseBalance(locale: Locale = .current) -> String {
         let dollars = Double(houseCents) / 100.0
         let nf = NumberFormatter()
@@ -223,4 +235,5 @@ final class EconomyStore: ObservableObject {
         nf.minimumFractionDigits = dollars.truncatingRemainder(dividingBy: 1) == 0 ? 0 : 2
         return nf.string(from: NSNumber(value: dollars)) ?? String(format: "$%.2f", dollars)
     }
+    #endif
 }

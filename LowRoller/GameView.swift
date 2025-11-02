@@ -10,7 +10,7 @@ struct GameView: View {
     @ObservedObject var engine: GameEngine
     @State private var botController: BotController?
     @StateObject private var leaderboard = LeaderboardStore()
-    @ObservedObject private var economy = EconomyStore.shared
+    // Removed unused: @ObservedObject private var economy = EconomyStore.shared
 
     // MARK: - State
     @State private var selectedDice = Set<Int>()
@@ -43,7 +43,7 @@ struct GameView: View {
     private let lightImpact = UIImpactFeedbackGenerator(style: .light)
     private let mediumImpact = UIImpactFeedbackGenerator(style: .medium)
     private let heavyImpact = UIImpactFeedbackGenerator(style: .heavy)
-    private let selectionFeedback = UISelectionFeedbackGenerator()
+    // Removed unused: private let selectionFeedback = UISelectionFeedbackGenerator()
     private let notificationFeedback = UINotificationFeedbackGenerator()
 
     // MARK: - Animation Namespace
@@ -613,11 +613,7 @@ struct GameView: View {
         }
     }
 
-    private func clearSelection() {
-        selectionFeedback.prepare()
-        withAnimation(.spring()) { selectedDice.removeAll() }
-        selectionFeedback.selectionChanged()
-    }
+    // Removed unused helper `clearSelection()`.
 
     // MARK: - Helpers
     private var currentPlayer: Player? {

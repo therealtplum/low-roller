@@ -921,9 +921,7 @@ struct EnhancedLeaderRow: View {
     let metric: LeaderMetric
     let onDelete: () -> Void
     let onReset: () -> Void
-    
-    @State private var showActions = false
-    
+        
     private let startingBankroll = 10_000 // $100 in cents
 
     private var metricValue: String {

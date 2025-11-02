@@ -1,15 +1,18 @@
+# .periphery.yml — Periphery 3.x
 project: LowRoller.xcodeproj
-schemes: [LowRoller]
-targets: [LowRoller]
-configuration: Debug
-format: xcode
-clean_build: false
+schemes:
+  - LowRoller
 
-# Be more aggressive:
-retain_public: false
+retain_public: true
 retain_assign_only_properties: true
 
-# Ignore previews/generated:
-excluded:
-  - "**/*Preview*.swift"
-  - "**/Generated/**/*"
+# Keep test targets & previews out of analysis
+exclude_targets:
+  - LowRollerTests
+  - LowRollerUITests
+
+report_exclude:
+  - "**/Generated/**"
+  - "**/*Previews.swift"
+  - "**/Previews/**"
+  - "**/*Tests*/**"

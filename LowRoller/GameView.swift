@@ -28,6 +28,12 @@ struct GameView: View {
     /// Debounce UI actions so the same engine call can't fire twice quickly.
     @State private var isActionBusy = false
 
+    /// Subtle shake when a normal roll lands (empty → non-empty faces).
+    @State private var rollShakeToken = 0
+
+    /// NEW: visible "face roll" overlay during normal rolls.
+    @State private var isRolling = false
+
     // MARK: - Haptics
     private let lightImpact = UIImpactFeedbackGenerator(style: .light)
     private let mediumImpact = UIImpactFeedbackGenerator(style: .medium)
@@ -86,7 +92,8 @@ struct GameView: View {
                 suddenRollToken &+= 1
             }
         }
-        .onChange(of: engine.state.lastFaces) { _, newFaces in
+        .onChange(of: engine.state.lastFaces) { oldFaces, newFaces in
+            // Bot reveal spinner for non-empty rolls
             if (currentPlayer?.isBot ?? false), !newFaces.isEmpty {
                 lastBotRevealToken &+= 1
                 let token = lastBotRevealToken
@@ -94,6 +101,16 @@ struct GameView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
                     if token == lastBotRevealToken { botRevealing = false }
                 }
+            }
+
+            // NEW: small shake when a normal roll lands (empty -> non-empty)
+            if engine.state.phase == .normal, oldFaces.isEmpty, !newFaces.isEmpty {
+                rollShakeToken &+= 1
+            }
+
+            // OPTIONAL #5: stop the pre-roll spinners immediately once faces arrive
+            if engine.state.phase == .normal, !newFaces.isEmpty {
+                isRolling = false
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .humanWonMatch)) { notification in
@@ -211,7 +228,9 @@ struct GameView: View {
     @ViewBuilder
     private var normalGameView: some View {
         Group {
-            if !engine.state.lastFaces.isEmpty {
+            if isRolling {
+                rollingGrid
+            } else if !engine.state.lastFaces.isEmpty {
                 diceGrid
                     .transition(.scale.combined(with: .opacity))
             } else if engine.state.remainingDice > 0 {
@@ -220,6 +239,30 @@ struct GameView: View {
                 Color.clear.frame(height: 160)
             }
         }
+    }
+
+    // MARK: - Rolling Grid (pre-roll face spinners)
+    @ViewBuilder
+    private var rollingGrid: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 90, maximum: 110))],
+            spacing: 10
+        ) {
+            // Show one spinner per die yet-to-roll (fallback to at least 1 to avoid empty grid)
+            ForEach(0..<max(engine.state.remainingDice, 1), id: \.self) { _ in
+                DiceRollerView(size: 90)
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                )
+        )
     }
 
     // MARK: - Dice Grid
@@ -233,7 +276,8 @@ struct GameView: View {
                 DiceButton(
                     face: face,
                     isSelected: selectedDice.contains(idx),
-                    size: 90
+                    size: 90,
+                    shakeToken: rollShakeToken
                 ) {
                     toggleDiceSelection(at: idx)
                 } onLongPress: {
@@ -246,6 +290,8 @@ struct GameView: View {
             }
         }
         .padding()
+        // If you want the whole grid to wiggle: uncomment next line
+        // .modifier(ShakeEffect(animatableData: CGFloat(rollShakeToken)))
         .background(
             RoundedRectangle(cornerRadius: 16)
                 .fill(Color.white.opacity(0.05))
@@ -445,19 +491,30 @@ struct GameView: View {
             rollButtonScale = 0.9
         }
 
-        engine.roll()
-        mediumImpact.impactOccurred()
+        // BEGIN pre-roll spinning UI
+        isRolling = true
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        // Let the rollers spin briefly before committing the engine roll
+        let spinDuration: TimeInterval = 0.45
+        DispatchQueue.main.asyncAfter(deadline: .now() + spinDuration) {
+            engine.roll()
+            mediumImpact.impactOccurred()
+
+            // Return the roll button to normal scale
             withAnimation(.spring()) { rollButtonScale = 1.0 }
-        }
 
-        // Short busy window to prevent accidental double taps / drag + tap overlap
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
-            isActionBusy = false
-        }
+            // If faces didn't arrive yet via onChange (unlikely), hide the spinner shortly after
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                isRolling = false
+            }
 
-        resetTimer()
+            // Re-enable actions (buffer to avoid double taps)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
+                isActionBusy = false
+            }
+
+            resetTimer()
+        }
     }
 
     private func toggleDiceSelection(at index: Int) {
@@ -819,13 +876,14 @@ struct DiceButton: View {
     let face: Int
     let isSelected: Bool
     let size: CGFloat
+    let shakeToken: Int
     let onTap: () -> Void
     let onLongPress: () -> Void
 
     @State private var isPressed = false
 
     var body: some View {
-        DiceView(face: face, selected: isSelected, size: size, shakeToken: 0)
+        DiceView(face: face, selected: isSelected, size: size, shakeToken: shakeToken)
             .scaleEffect(isPressed ? 0.9 : 1.0)
             .animation(.spring(response: 0.2), value: isPressed)
             .contentShape(Rectangle())
@@ -842,7 +900,7 @@ struct DiceButton: View {
     }
 }
 
-// MARK: - Rolling Dice Cycler (for Sudden Death animation)
+// MARK: - Rolling Dice Cycler (used in Sudden Death + normal pre-roll)
 private struct DiceRollerView: View {
     let size: CGFloat
     @State private var face: Int = 1
@@ -859,7 +917,7 @@ private struct DiceRollerView: View {
     }
 }
 
-// MARK: - Shake Effect for dice animations
+// MARK: - Shake Effect for dice animations (optional whole-grid wiggle)
 struct ShakeEffect: GeometryEffect {
     var animatableData: CGFloat
 

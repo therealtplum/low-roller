@@ -13,8 +13,6 @@ extension Notification.Name {
 }
 
 // MARK: - Telemetry payloads local to GameEngine
-// (Only the ones that originally lived in this file remain. We do NOT redeclare
-// MatchStartedPayload, PlayerSeat, DiceRolledPayload, DecisionMadePayload here.)
 
 private struct TurnStartedPayload: Codable {
     let turn: Int
@@ -63,10 +61,8 @@ final class GameEngine: ObservableObject {
 
     // MARK: - Telemetry
     private let bus = EventBus.shared
-    private let matchUUID = UUID()                // Concrete UUID for analytics
+    private let matchUUID = UUID()                // <- concrete UUID to satisfy Log.* deprecation
     private var matchId: String { matchUUID.uuidString }
-    /// Public accessor so other layers (e.g., PreGameView) can log with the same UUID.
-    public var matchIdUUID: UUID { matchUUID }
 
     // MARK: - Init
 
@@ -91,46 +87,27 @@ final class GameEngine: ObservableObject {
             self.state.baseWagerCentsPerPlayer = first.wagerCents
         }
 
-        // --- match_started (EventBus)
+        // match_started
         let seats: [PlayerSeat] = hydrated.enumerated().map { (i, _) in
             PlayerSeat(playerId: "p\(i)", name: displayName(i), seat: i)
         }
         bus.emit(.match_started,
                  matchId: matchId,
-                 body: MatchStartedPayload(
-                    players: seats,
-                    stakesCents: self.state.baseWagerCentsPerPlayer,
-                    tableMode: "standard",
-                    houseRules: [
-                        "rerollOnTie": true,
-                        "maxRollsPerTurn": true
-                    ])
-        )
-
-        // --- match_started (Analytics facade)
-        let playersPayload: [[String: Any]] = hydrated.enumerated().map { idx, p in
-            [
-                "playerId": "p\(idx)",
-                "name": displayName(idx),
-                "seat": idx,
-                "isBot": p.isBot,
-                "wagerCents": p.wagerCents
-            ]
-        }
-        Log.matchStarted(
-            matchId: matchUUID,
-            players: playersPayload,
-            tableMode: "standard",
-            houseRules: ["rerollOnTie": true, "maxRollsPerTurn": true],
-            advertisedStakesCents: self.state.baseWagerCentsPerPlayer,
-            youStartSeat: s.turnIdx
-        )
+                 body: MatchStartedPayload(players: seats,
+                                           stakesCents: nil,
+                                           tableMode: "standard",
+                                           houseRules: ["rerollOnTie": true, "maxRollsPerTurn": true]))
 
         // Debit wagers and build pot
         assemblePotFromPlayerWagers()
 
         // First turn
         emitTurnStarted()
+    }
+
+    convenience init(players: [Player], youStart: Bool) {
+        let tmp = LeaderboardStore()
+        self.init(players: players, youStart: youStart, leaders: tmp)
     }
 
     // MARK: - Helpers
@@ -159,24 +136,13 @@ final class GameEngine: ObservableObject {
     private func playerId(_ idx: Int) -> String { "p\(idx)" }
 
     private func emitTurnStarted() {
-        let turnNumber = state.turnsTaken + 1
-
-        // EventBus
         bus.emit(.turn_started,
                  matchId: matchId,
                  body: TurnStartedPayload(
-                    turn: turnNumber,
+                    turn: state.turnsTaken + 1,
                     playerId: playerId(state.turnIdx),
                     diceInCup: state.remainingDice
                  ))
-
-        // Analytics
-        Log.turnStarted(
-            matchId: matchUUID,
-            turnNumber: turnNumber,
-            playerId: playerId(state.turnIdx),
-            diceInCup: state.remainingDice
-        )
     }
 
     private func tally(_ picks: [Int]) -> [String:Int] {
@@ -197,7 +163,6 @@ final class GameEngine: ObservableObject {
         let faces = (0..<state.remainingDice).map { _ in Int.random(in: 1...6, using: &rng) }
         state.lastFaces = faces
 
-        // EventBus
         bus.emit(.dice_rolled,
                  matchId: matchId,
                  body: DiceRolledPayload(
@@ -205,18 +170,8 @@ final class GameEngine: ObservableObject {
                     rollerPlayerId: playerId(state.turnIdx),
                     faces: faces,
                     diceBefore: before,
-                    diceAfter: before // dice-in-cup count unchanged after roll
+                    diceAfter: before
                  ))
-
-        // Analytics
-        Log.diceRolled(
-            matchId: matchUUID,
-            turnNumber: state.turnsTaken + 1,
-            rollerPlayerId: playerId(state.turnIdx),
-            faces: faces,
-            diceBefore: before,
-            diceAfter: before
-        )
     }
 
     /// Keep selected dice – disabled while in Sudden Death or Finished.
@@ -237,8 +192,6 @@ final class GameEngine: ObservableObject {
 
         let turn = state.turnsTaken + 1
         let currentTurnPicks = state.players[state.turnIdx].picks
-
-        // EventBus
         bus.emit(.decision_made,
                  matchId: matchId,
                  body: DecisionMadePayload(
@@ -249,17 +202,6 @@ final class GameEngine: ObservableObject {
                     keptTallies: tally(currentTurnPicks),
                     diceRemaining: state.remainingDice
                  ))
-
-        // Analytics
-        Log.decisionMade(
-            matchId: matchUUID,
-            turnNumber: turn,
-            playerId: playerId(state.turnIdx),
-            pickedFaces: pickedValues,
-            keptIndices: uniq,
-            keptTallies: tally(currentTurnPicks),
-            diceRemaining: state.remainingDice
-        )
 
         _ = endTurnIfDone()
     }
@@ -275,8 +217,6 @@ final class GameEngine: ObservableObject {
         let endedIdx = state.turnIdx
         let turn = state.turnsTaken + 1
         let turnScore = totalPoints(for: state.players[endedIdx])
-
-        // EventBus
         bus.emit(.turn_ended,
                  matchId: matchId,
                  body: TurnEndedPayload(
@@ -285,15 +225,6 @@ final class GameEngine: ObservableObject {
                     turnScore: turnScore,
                     bust: false
                  ))
-
-        // Analytics
-        Log.turnEnded(
-            matchId: matchUUID,
-            turnNumber: turn,
-            playerId: playerId(endedIdx),
-            turnScore: turnScore,
-            bust: false
-        )
 
         state.turnsTaken &+= 1
 
@@ -322,10 +253,7 @@ final class GameEngine: ObservableObject {
 
     // MARK: - Sudden Death
 
-<<<<<<< HEAD
-=======
     /// Enter Sudden Death; suppress all normal turn progression until resolved.
->>>>>>> 7656bd6 (cleaned states)
     private func startSuddenDeath(with contenders: [Int]) {
         state.phase = .suddenDeath
         state.suddenContenders = contenders
@@ -333,29 +261,10 @@ final class GameEngine: ObservableObject {
         state.suddenRound &+= 1
 
         let ids = contenders.map { playerId($0) }
-<<<<<<< HEAD
-
-        // EventBus
-=======
->>>>>>> 7656bd6 (cleaned states)
         bus.emit(.sudden_death_started,
                  matchId: matchId,
                  body: SuddenDeathStartedPayload(
                     reason: "tie_at_top",
-<<<<<<< HEAD
-                    players: ids
-                 ))
-
-        // Analytics
-        Log.suddenDeathStarted(
-            matchId: matchUUID,
-            reason: "tie_at_top",
-            playerIds: ids,
-            round: state.suddenRound
-        )
-    }
-
-=======
                     players: ids,
                     round: state.suddenRound
                  ))
@@ -363,7 +272,6 @@ final class GameEngine: ObservableObject {
 
     /// One UI press triggers rolling for both contenders (your current design).
     /// If you later want to animate per-player, split this into two calls.
->>>>>>> 7656bd6 (cleaned states)
     func rollSuddenDeath() -> Int? {
         guard state.phase == .suddenDeath, var contenders = state.suddenContenders else { return nil }
 
@@ -371,8 +279,6 @@ final class GameEngine: ObservableObject {
         for idx in contenders {
             let face = Int.random(in: 1...6, using: &rng)
             rolls[idx] = face
-
-            // EventBus
             bus.emit(.sudden_death_rolled,
                      matchId: matchId,
                      body: SuddenDeathRolledPayload(
@@ -380,14 +286,6 @@ final class GameEngine: ObservableObject {
                         playerId: playerId(idx),
                         face: face
                      ))
-
-            // Analytics
-            Log.suddenDeathRolled(
-                matchId: matchUUID,
-                round: state.suddenRound,
-                playerId: playerId(idx),
-                face: face
-            )
         }
         state.suddenRolls = rolls
 
@@ -396,19 +294,9 @@ final class GameEngine: ObservableObject {
 
         if lowest.count == 1 {
             state.winnerIdx = lowest[0]
-
-            // EventBus
             bus.emit(.sudden_death_ended,
                      matchId: matchId,
                      body: SuddenDeathEndedPayload(winnerPlayerId: playerId(lowest[0])))
-
-            // Analytics
-            Log.suddenDeathEnded(
-                matchId: matchUUID,
-                winnerPlayerId: playerId(lowest[0]),
-                round: state.suddenRound
-            )
-
             finalizeAndNotify()
             return state.winnerIdx
         } else {
@@ -450,8 +338,6 @@ final class GameEngine: ObservableObject {
 
         let challengerIdx = (winner == 0) ? 1 : 0
         let stake = state.players[0].wagerCents
-
-        // EventBus
         bus.emit(.double_or_nothing_started,
                  matchId: matchId,
                  body: DoubleOrNothingStartedPayload(
@@ -460,25 +346,17 @@ final class GameEngine: ObservableObject {
                     stakeCents: stake
                  ))
 
-        // Analytics
-        Log.doubleOrNothingStarted(
-            matchId: matchUUID,
-            challengerId: playerId(challengerIdx),
-            opponentId: playerId(winner),
-            stakeCentsPerPlayer: stake
-        )
-
         // Each player posts original wager again
         for i in state.players.indices {
             let originalWager = state.players[i].wagerCents
             let oldBankroll = state.players[i].bankrollCents
             state.players[i].bankrollCents -= originalWager
 
-            // Centralized ledger
-            EconomyStore.shared.recordBuyIn(fromPlayer: displayName(i),
-                                            amountCents: originalWager,
-                                            matchId: matchUUID,
-                                            matchIdString: matchId)
+            // Legacy line with concrete matchId (kills deprecation warning)
+            Log.bankDebited(player: displayName(i),
+                            amountCents: originalWager,
+                            reason: "double_or_nothing",
+                            matchId: matchUUID)
 
             if oldBankroll >= 0 && state.players[i].bankrollCents < 0 {
                 let borrowedAmount = abs(state.players[i].bankrollCents)
@@ -502,7 +380,7 @@ final class GameEngine: ObservableObject {
         finalizeAndNotify()
     }
 
-    // MARK: - Round reset
+    // MARK: - Round/Match resets
 
     func resetForNewRound() {
         state.remainingDice = 7
@@ -513,6 +391,18 @@ final class GameEngine: ObservableObject {
         state.suddenContenders = nil
         state.suddenRolls = nil
         state.phase = .normal
+        for i in state.players.indices { state.players[i].picks.removeAll() }
+    }
+
+    func resetForNewMatch() {
+        state.remainingDice = 7
+        state.lastFaces = []
+        state.phase = .normal
+        state.turnsTaken = 0
+        state.winnerIdx = nil
+        state.suddenRound = 0
+        state.suddenContenders = nil
+        state.suddenRolls = nil
         for i in state.players.indices { state.players[i].picks.removeAll() }
     }
 
@@ -536,6 +426,8 @@ final class GameEngine: ObservableObject {
             roll()
         }
     }
+
+    func onTimeout() { handleTurnTimeout() }
 
     // MARK: - Bot-like picking
 
@@ -608,7 +500,7 @@ final class GameEngine: ObservableObject {
             let oldBankroll = state.players[i].bankrollCents
             state.players[i].bankrollCents -= wager
 
-            // Centralized ledger (EventBus + EconomyStore) and concrete matchId for analytics
+            // Centralized ledger (EventBus + legacy) AND concrete matchId to silence deprecation
             EconomyStore.shared.recordBuyIn(fromPlayer: displayName(i),
                                             amountCents: wager,
                                             matchId: matchUUID,
@@ -645,15 +537,12 @@ final class GameEngine: ObservableObject {
 
         state.players[w].bankrollCents += state.potCents
 
-        // Centralized ledger entry (debit house / credit winner account on the bus)
-        EconomyStore.shared.recordMatchPayout(
-            toWinner: displayName(w),
-            amountCents: state.potCents,
-            matchId: matchUUID,
-            matchIdString: matchId
-        )
+        // Legacy credit with concrete matchId (kills deprecation warning)
+        Log.bankCredited(player: displayName(w),
+                         amountCents: state.potCents,
+                         reason: "match_win",
+                         matchId: matchUUID)
 
-        // EventBus
         bus.emit(.match_ended,
                  matchId: matchId,
                  body: MatchEndedPayload(
@@ -661,18 +550,6 @@ final class GameEngine: ObservableObject {
                     potCents: state.potCents,
                     doubleCount: state.doubleCount
                  ))
-
-        // Analytics (match_ended with balances)
-        let balances = Dictionary(uniqueKeysWithValues: state.players.enumerated().map { (i, p) in
-            (playerId(i), p.bankrollCents)
-        })
-        Log.matchEnded(
-            matchId: matchUUID,
-            winnerPlayerId: playerId(w),
-            potCents: state.potCents,
-            doubleCount: state.doubleCount,
-            finalBalances: balances
-        )
 
         let humanWon = !state.players[w].isBot
         NotificationCenter.default.post(name: .humanWonMatch, object: humanWon)

@@ -105,6 +105,7 @@ struct HUDView: View {
     private func currency(_ cents: Int) -> String {
         let sign = cents < 0 ? "-" : ""
         let absVal = abs(cents)
-        return "\(sign)$\(absVal / 100).\(String(format: "%02d", absVal % 100))"
+        let dollars = absVal / 100
+        return "\(sign)$\(dollars)"
     }
 }

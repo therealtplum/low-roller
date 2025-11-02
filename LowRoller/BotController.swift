@@ -9,39 +9,39 @@ import Combine
 final class BotController: ObservableObject {
     private weak var engine: GameEngine?
     private var workItem: DispatchWorkItem?
-    
-    // Optional: Add published property if you want to track bot processing state
+
+    // Optional: publish bot activity for UI
     @Published private(set) var isProcessing = false
 
     init(bind engine: GameEngine) {
         self.engine = engine
     }
-    
+
     deinit {
-        // Ensure cleanup
         workItem?.cancel()
     }
 
-    /// Call this on appear and whenever turn/lastFaces change.
+    /// Call this on appear and whenever turn/phase/lastFaces change.
     func scheduleBotIfNeeded() {
         workItem?.cancel()
         guard let eng = engine else { return }
-        guard eng.state.phase != .finished else {
+
+        // ⬇️ ONLY drive in normal phase
+        guard eng.state.phase == .normal else {
             isProcessing = false
             return
         }
+
+        guard eng.state.phase != .finished else { isProcessing = false; return }
 
         let cur = eng.state.players[eng.state.turnIdx]
         guard cur.isBot else {
             isProcessing = false
             return
         }
-        
-        isProcessing = true
 
-        let item = DispatchWorkItem { [weak self] in
-            self?.stepLoop()
-        }
+        isProcessing = true
+        let item = DispatchWorkItem { [weak self] in self?.stepLoop() }
         workItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: item)
     }
@@ -51,6 +51,13 @@ final class BotController: ObservableObject {
             isProcessing = false
             return
         }
+
+        // ⬇️ ONLY drive in normal phase
+        guard eng.state.phase == .normal else {
+            isProcessing = false
+            return
+        }
+
         guard eng.state.phase != .finished else {
             isProcessing = false
             return
@@ -74,7 +81,7 @@ final class BotController: ObservableObject {
 
         // If next player is also a bot, continue; otherwise stop.
         let moreBots =
-            eng.state.phase != .finished &&
+            eng.state.phase == .normal &&
             eng.state.players[eng.state.turnIdx].isBot
 
         if moreBots {

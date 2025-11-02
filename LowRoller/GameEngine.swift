@@ -32,6 +32,7 @@ private struct TurnEndedPayload: Codable {
 private struct SuddenDeathStartedPayload: Codable {
     let reason: String
     let players: [String]
+    let round: Int            // ⬅️ added to mirror other SD events
 }
 
 private struct SuddenDeathRolledPayload: Codable {
@@ -184,9 +185,13 @@ final class GameEngine: ObservableObject {
         return t
     }
 
-    // MARK: - Public actions
+    // MARK: - Public actions (NORMAL PHASE ONLY)
 
+    /// Normal roll – disabled while in Sudden Death or Finished.
     func roll() {
+        // ⬇️ PHASE GATE
+        guard state.phase == .normal else { return }
+
         guard !isFinished, state.remainingDice > 0, state.lastFaces.isEmpty else { return }
         let before = state.remainingDice
         let faces = (0..<state.remainingDice).map { _ in Int.random(in: 1...6, using: &rng) }
@@ -214,7 +219,11 @@ final class GameEngine: ObservableObject {
         )
     }
 
+    /// Keep selected dice – disabled while in Sudden Death or Finished.
     func pick(indices: [Int]) {
+        // ⬇️ PHASE GATE
+        guard state.phase == .normal else { return }
+
         guard !isFinished, !state.lastFaces.isEmpty else { return }
 
         let uniq = Array(Set(indices)).sorted()
@@ -255,8 +264,12 @@ final class GameEngine: ObservableObject {
         _ = endTurnIfDone()
     }
 
+    /// End turn when all dice are kept – disabled while in Sudden Death or Finished.
     @discardableResult
     func endTurnIfDone() -> Bool {
+        // ⬇️ PHASE GATE
+        guard state.phase == .normal else { return false }
+
         guard state.remainingDice == 0 else { return false }
 
         let endedIdx = state.turnIdx
@@ -309,6 +322,10 @@ final class GameEngine: ObservableObject {
 
     // MARK: - Sudden Death
 
+<<<<<<< HEAD
+=======
+    /// Enter Sudden Death; suppress all normal turn progression until resolved.
+>>>>>>> 7656bd6 (cleaned states)
     private func startSuddenDeath(with contenders: [Int]) {
         state.phase = .suddenDeath
         state.suddenContenders = contenders
@@ -316,12 +333,16 @@ final class GameEngine: ObservableObject {
         state.suddenRound &+= 1
 
         let ids = contenders.map { playerId($0) }
+<<<<<<< HEAD
 
         // EventBus
+=======
+>>>>>>> 7656bd6 (cleaned states)
         bus.emit(.sudden_death_started,
                  matchId: matchId,
                  body: SuddenDeathStartedPayload(
                     reason: "tie_at_top",
+<<<<<<< HEAD
                     players: ids
                  ))
 
@@ -334,6 +355,15 @@ final class GameEngine: ObservableObject {
         )
     }
 
+=======
+                    players: ids,
+                    round: state.suddenRound
+                 ))
+    }
+
+    /// One UI press triggers rolling for both contenders (your current design).
+    /// If you later want to animate per-player, split this into two calls.
+>>>>>>> 7656bd6 (cleaned states)
     func rollSuddenDeath() -> Int? {
         guard state.phase == .suddenDeath, var contenders = state.suddenContenders else { return nil }
 
@@ -382,9 +412,19 @@ final class GameEngine: ObservableObject {
             finalizeAndNotify()
             return state.winnerIdx
         } else {
+            // Tie within SD → next SD round among the tied players only
             contenders = lowest
             state.suddenContenders = contenders
             state.suddenRound &+= 1
+
+            let ids = contenders.map { playerId($0) }
+            bus.emit(.sudden_death_started,
+                     matchId: matchId,
+                     body: SuddenDeathStartedPayload(
+                        reason: "tie_at_top",
+                        players: ids,
+                        round: state.suddenRound
+                     ))
             return nil
         }
     }
@@ -480,7 +520,7 @@ final class GameEngine: ObservableObject {
 
     func handleTurnTimeout() {
         guard !isFinished,
-              state.phase == .normal,
+              state.phase == .normal,                 // ⬅️ already gated to normal
               state.turnIdx < state.players.count,
               !state.players[state.turnIdx].isBot
         else { return }
@@ -500,6 +540,8 @@ final class GameEngine: ObservableObject {
     // MARK: - Bot-like picking
 
     func smartPick() {
+        // ⬇️ EXTRA safety: don’t pick during SD/finished
+        guard state.phase == .normal else { return }
         guard !state.lastFaces.isEmpty else { return }
 
         let faces = state.lastFaces

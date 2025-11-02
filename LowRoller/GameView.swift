@@ -38,11 +38,14 @@ struct GameView: View {
     @State private var zeroHeroToken = 0               // animation token for overlays/glow
     @State private var zeroRoundAllThrees = true       // tracking across picks in a round
 
+    /// Sudden Death result hold (to keep faces visible before winner screen)
+    @State private var showSuddenRevealHold = false
+    @State private var suddenRevealToken = 0
+
     // MARK: - Haptics
     private let lightImpact = UIImpactFeedbackGenerator(style: .light)
     private let mediumImpact = UIImpactFeedbackGenerator(style: .medium)
     private let heavyImpact = UIImpactFeedbackGenerator(style: .heavy)
-    // Removed unused: private let selectionFeedback = UISelectionFeedbackGenerator()
     private let notificationFeedback = UINotificationFeedbackGenerator()
 
     // MARK: - Animation Namespace
@@ -100,11 +103,26 @@ struct GameView: View {
             // New round for whoever's turn it is now
             zeroRoundAllThrees = true
         }
-        .onChange(of: engine.state.phase) { _, newPhase in
+        .onChange(of: engine.state.phase) { oldPhase, newPhase in
             botController?.scheduleBotIfNeeded()
+
+            // Clear SD roll state when leaving SD
             if newPhase != .suddenDeath {
                 isSuddenRolling = false
                 suddenRollToken &+= 1
+            }
+
+            // Linger on the revealed dice when Sudden Death ends
+            if oldPhase == .suddenDeath && newPhase == .finished {
+                showSuddenRevealHold = true
+                suddenRevealToken &+= 1
+                let tok = suddenRevealToken
+                let linger: TimeInterval = 1.2   // tweak 0.8–1.5s to taste
+                DispatchQueue.main.asyncAfter(deadline: .now() + linger) {
+                    if tok == suddenRevealToken {
+                        showSuddenRevealHold = false
+                    }
+                }
             }
         }
         .onChange(of: engine.state.lastFaces) { oldFaces, newFaces in
@@ -224,15 +242,20 @@ struct GameView: View {
     @ViewBuilder
     private func DiceStage() -> some View {
         Group {
-            switch engine.state.phase {
-            case .normal:
-                normalGameView
-            case .suddenDeath:
+            // Hold on Sudden Death results briefly even if engine has moved to .finished
+            if engine.state.phase == .finished && showSuddenRevealHold {
                 suddenDeathView
-            case .awaitDouble:
-                doubleOrNothingView
-            case .finished:
-                finishedView
+            } else {
+                switch engine.state.phase {
+                case .normal:
+                    normalGameView
+                case .suddenDeath:
+                    suddenDeathView
+                case .awaitDouble:
+                    doubleOrNothingView
+                case .finished:
+                    finishedView
+                }
             }
         }
         .animation(.spring(response: 0.45, dampingFraction: 0.85), value: engine.state.phase)

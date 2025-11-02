@@ -32,7 +32,7 @@ private struct TurnEndedPayload: Codable {
 private struct SuddenDeathStartedPayload: Codable {
     let reason: String
     let players: [String]
-    let round: Int
+    let round: Int            // ⬅️ added to mirror other SD events
 }
 
 private struct SuddenDeathRolledPayload: Codable {
@@ -322,7 +322,10 @@ final class GameEngine: ObservableObject {
 
     // MARK: - Sudden Death
 
+<<<<<<< HEAD
+=======
     /// Enter Sudden Death; suppress all normal turn progression until resolved.
+>>>>>>> 7656bd6 (cleaned states)
     private func startSuddenDeath(with contenders: [Int]) {
         state.phase = .suddenDeath
         state.suddenContenders = contenders
@@ -330,14 +333,17 @@ final class GameEngine: ObservableObject {
         state.suddenRound &+= 1
 
         let ids = contenders.map { playerId($0) }
+<<<<<<< HEAD
 
         // EventBus
+=======
+>>>>>>> 7656bd6 (cleaned states)
         bus.emit(.sudden_death_started,
                  matchId: matchId,
                  body: SuddenDeathStartedPayload(
                     reason: "tie_at_top",
-                    players: ids,
-                    round: state.suddenRound
+<<<<<<< HEAD
+                    players: ids
                  ))
 
         // Analytics
@@ -349,7 +355,15 @@ final class GameEngine: ObservableObject {
         )
     }
 
-    /// One UI press triggers rolling for both contenders.
+=======
+                    players: ids,
+                    round: state.suddenRound
+                 ))
+    }
+
+    /// One UI press triggers rolling for both contenders (your current design).
+    /// If you later want to animate per-player, split this into two calls.
+>>>>>>> 7656bd6 (cleaned states)
     func rollSuddenDeath() -> Int? {
         guard state.phase == .suddenDeath, var contenders = state.suddenContenders else { return nil }
 
@@ -506,7 +520,7 @@ final class GameEngine: ObservableObject {
 
     func handleTurnTimeout() {
         guard !isFinished,
-              state.phase == .normal,
+              state.phase == .normal,                 // ⬅️ already gated to normal
               state.turnIdx < state.players.count,
               !state.players[state.turnIdx].isBot
         else { return }

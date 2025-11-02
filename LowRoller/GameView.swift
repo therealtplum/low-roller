@@ -10,7 +10,6 @@ struct GameView: View {
     @ObservedObject var engine: GameEngine
     @State private var botController: BotController?
     @StateObject private var leaderboard = LeaderboardStore()
-    // Removed unused: @ObservedObject private var economy = EconomyStore.shared
 
     // MARK: - State
     @State private var selectedDice = Set<Int>()
@@ -91,10 +90,13 @@ struct GameView: View {
                     .zIndex(10)
             }
         }
-        .onAppear { setupGame() }
+        .onAppear {
+            setupGame()
+            ensureTimerForCurrentTurn()   // ← start/stop based on whose turn it is
+        }
         .onChange(of: engine.state.turnIdx) { _, _ in
             botController?.scheduleBotIfNeeded()
-            resetTimer()
+            ensureTimerForCurrentTurn()   // ← was resetTimer()
             // New round for whoever's turn it is now
             zeroRoundAllThrees = true
         }
@@ -523,7 +525,7 @@ struct GameView: View {
                 isActionBusy = false
             }
 
-            resetTimer()
+            ensureTimerForCurrentTurn()  // ← reset+tick only for human
         }
     }
 
@@ -595,7 +597,7 @@ struct GameView: View {
             }
         }
 
-        resetTimer()
+        ensureTimerForCurrentTurn()  // ← reset+tick only for human
     }
 
     private func triggerZeroHero() {
@@ -612,8 +614,6 @@ struct GameView: View {
             }
         }
     }
-
-    // Removed unused helper `clearSelection()`.
 
     // MARK: - Helpers
     private var currentPlayer: Player? {
@@ -647,19 +647,27 @@ struct GameView: View {
     private func setupGame() {
         if botController == nil { botController = BotController(bind: engine) }
         botController?.scheduleBotIfNeeded()
-        startTimer()
+        // Timer setup moved to onAppear/ensureTimerForCurrentTurn()
     }
 
-    private func startTimer() {
-        timer?.invalidate()
+    // Unified timer controller: resets and starts/stops based on whose turn it is.
+    private func ensureTimerForCurrentTurn() {
+        // Always reset the visible time for a new/changed turn or action.
         timeLeft = 20
 
-        guard !(currentPlayer?.isBot ?? false) else { return }
+        // If it's a bot's turn, stop any running timer and bail.
+        if isBotsTurn {
+            timer?.invalidate()
+            timer = nil
+            return
+        }
 
+        // Human turn → start (or restart) a ticking timer.
+        timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             if timeLeft > 0 {
                 timeLeft -= 1
-                if timeLeft == 5 && !(currentPlayer?.isBot ?? false) {
+                if timeLeft == 5 {
                     notificationFeedback.notificationOccurred(.warning)
                 }
             } else {
@@ -669,13 +677,14 @@ struct GameView: View {
         RunLoop.main.add(timer!, forMode: .common)
     }
 
-    private func resetTimer() { timeLeft = 20 }
+    // Keep old signature; now delegates to the unified helper.
+    private func resetTimer() { ensureTimerForCurrentTurn() }
 
     private func handleTimeout() {
         if !(currentPlayer?.isBot ?? false) {
             engine.handleTurnTimeout()
         }
-        resetTimer()
+        ensureTimerForCurrentTurn()
     }
 
     private func handleMatchEnd(humanWon: Bool) {

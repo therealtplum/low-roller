@@ -31,8 +31,13 @@ struct GameView: View {
     /// Subtle shake when a normal roll lands (empty → non-empty faces).
     @State private var rollShakeToken = 0
 
-    /// NEW: visible "face roll" overlay during normal rolls.
+    /// Visible "face roll" overlay during normal rolls.
     @State private var isRolling = false
+
+    /// ZERO HERO easter egg state
+    @State private var showZeroHero = false            // overlay on/off
+    @State private var zeroHeroToken = 0               // animation token for overlays/glow
+    @State private var zeroRoundAllThrees = true       // tracking across picks in a round
 
     // MARK: - Haptics
     private let lightImpact = UIImpactFeedbackGenerator(style: .light)
@@ -44,9 +49,7 @@ struct GameView: View {
     // MARK: - Animation Namespace
     @Namespace private var animation
 
-    init(engine: GameEngine) {
-        self.engine = engine
-    }
+    init(engine: GameEngine) { self.engine = engine }
 
     var body: some View {
         ZStack {
@@ -79,11 +82,21 @@ struct GameView: View {
                     .allowsHitTesting(false)
                     .transition(.opacity)
             }
+
+            // ZERO HERO celebratory overlay
+            if showZeroHero {
+                ZeroHeroOverlay()
+                    .transition(.scale.combined(with: .opacity))
+                    .animation(.spring(response: 0.5, dampingFraction: 0.6), value: showZeroHero)
+                    .zIndex(10)
+            }
         }
         .onAppear { setupGame() }
         .onChange(of: engine.state.turnIdx) { _, _ in
             botController?.scheduleBotIfNeeded()
             resetTimer()
+            // New round for whoever's turn it is now
+            zeroRoundAllThrees = true
         }
         .onChange(of: engine.state.phase) { _, newPhase in
             botController?.scheduleBotIfNeeded()
@@ -103,12 +116,12 @@ struct GameView: View {
                 }
             }
 
-            // NEW: small shake when a normal roll lands (empty -> non-empty)
+            // small shake when a normal roll lands (empty -> non-empty)
             if engine.state.phase == .normal, oldFaces.isEmpty, !newFaces.isEmpty {
                 rollShakeToken &+= 1
             }
 
-            // OPTIONAL #5: stop the pre-roll spinners immediately once faces arrive
+            // stop the pre-roll spinners immediately once faces arrive
             if engine.state.phase == .normal, !newFaces.isEmpty {
                 isRolling = false
             }
@@ -248,7 +261,7 @@ struct GameView: View {
             columns: [GridItem(.adaptive(minimum: 90, maximum: 110))],
             spacing: 10
         ) {
-            // Show one spinner per die yet-to-roll (fallback to at least 1 to avoid empty grid)
+            // one spinner per die yet-to-roll (fallback to at least 1 to avoid empty grid)
             ForEach(0..<max(engine.state.remainingDice, 1), id: \.self) { _ in
                 DiceRollerView(size: 90)
                     .transition(.scale.combined(with: .opacity))
@@ -277,7 +290,8 @@ struct GameView: View {
                     face: face,
                     isSelected: selectedDice.contains(idx),
                     size: 90,
-                    shakeToken: rollShakeToken
+                    shakeToken: rollShakeToken,
+                    festiveToken: showZeroHero ? zeroHeroToken : 0   // add glow during Zero Hero
                 ) {
                     toggleDiceSelection(at: idx)
                 } onLongPress: {
@@ -290,7 +304,7 @@ struct GameView: View {
             }
         }
         .padding()
-        // If you want the whole grid to wiggle: uncomment next line
+        // Optional: whole-grid wiggle on roll
         // .modifier(ShakeEffect(animatableData: CGFloat(rollShakeToken)))
         .background(
             RoundedRectangle(cornerRadius: 16)
@@ -446,9 +460,7 @@ struct GameView: View {
         }
     }
 
-    private var showBotSpinner: Bool {
-        engine.state.phase != .finished
-    }
+    private var showBotSpinner: Bool { engine.state.phase != .finished }
 
     // MARK: - Bot Placeholder
     private var botActionPlaceholder: some View {
@@ -463,9 +475,7 @@ struct GameView: View {
 
             Spacer()
 
-            if showBotSpinner {
-                ProgressView().progressViewStyle(.circular)
-            }
+            if showBotSpinner { ProgressView().progressViewStyle(.circular) }
         }
         .padding(.vertical, 14)
         .padding(.horizontal, 12)
@@ -552,7 +562,15 @@ struct GameView: View {
 
         notificationFeedback.prepare()
 
+        // Capture the faces being picked now
         let indices = Array(selectedDice).sorted()
+        let facesBeingPicked = indices.map { engine.state.lastFaces[$0] }
+
+        // If any picked face isn't a 3, this round can no longer be a Zero Hero
+        if facesBeingPicked.contains(where: { $0 != 3 }) {
+            zeroRoundAllThrees = false
+        }
+
         engine.pick(indices: indices)
 
         withAnimation(.spring()) {
@@ -560,12 +578,39 @@ struct GameView: View {
         }
         notificationFeedback.notificationOccurred(.success)
 
-        // Short busy window
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
-            isActionBusy = false
+        // After engine state updates, check if the round has ended with only 3s
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            // A "Zero Hero" triggers when: human turn, normal phase, no dice remaining this round, and we never picked a non-3
+            if engine.state.phase == .normal,
+               !(currentPlayer?.isBot ?? false),
+               engine.state.remainingDice == 0,
+               zeroRoundAllThrees {
+
+                triggerZeroHero()
+            }
+
+            // Re-enable actions
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
+                isActionBusy = false
+            }
         }
 
         resetTimer()
+    }
+
+    private func triggerZeroHero() {
+        zeroHeroToken &+= 1
+        showZeroHero = true
+        notificationFeedback.notificationOccurred(.success)
+        heavyImpact.impactOccurred()
+
+        let myTok = zeroHeroToken
+        // Auto-hide after 4.0s if not superseded
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+            if myTok == zeroHeroToken {
+                showZeroHero = false
+            }
+        }
     }
 
     private func clearSelection() {
@@ -595,9 +640,7 @@ struct GameView: View {
             .map { $0.element.totalScore }
             .filter { $0 > 0 }
 
-        if let minNonZero = opponentScores.min() {
-            return minNonZero
-        }
+        if let minNonZero = opponentScores.min() { return minNonZero }
 
         let anyZeroOpponent = engine.state.players.enumerated()
             .contains { $0.offset != currentIdx && $0.element.totalScore == 0 }
@@ -606,9 +649,7 @@ struct GameView: View {
     }
 
     private func setupGame() {
-        if botController == nil {
-            botController = BotController(bind: engine)
-        }
+        if botController == nil { botController = BotController(bind: engine) }
         botController?.scheduleBotIfNeeded()
         startTimer()
     }
@@ -632,9 +673,7 @@ struct GameView: View {
         RunLoop.main.add(timer!, forMode: .common)
     }
 
-    private func resetTimer() {
-        timeLeft = 20
-    }
+    private func resetTimer() { timeLeft = 20 }
 
     private func handleTimeout() {
         if !(currentPlayer?.isBot ?? false) {
@@ -646,7 +685,7 @@ struct GameView: View {
     private func handleMatchEnd(humanWon: Bool) {
         timer?.invalidate()
 
-        // Slight delay gives the UI a moment to reveal final dice before confetti.
+        // Slight delay to reveal final dice before confetti.
         let delay: TimeInterval = humanWon ? 0.35 : 0.0
 
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
@@ -869,34 +908,107 @@ struct GameView: View {
         nf.minimumFractionDigits = dollars.truncatingRemainder(dividingBy: 1) == 0 ? 0 : 2
         return nf.string(from: NSNumber(value: dollars)) ?? String(format: "$%.2f", dollars)
     }
+
+    // MARK: - Zero Hero Overlay
+    @ViewBuilder
+    private func ZeroHeroOverlay() -> some View {
+        ZStack {
+            // subtle backdrop blur
+            Color.black.opacity(0.25).ignoresSafeArea()
+
+            VStack(spacing: 16) {
+                Text("🎯 ZERO HERO! 🎯")
+                    .font(.system(size: 40, weight: .black))
+                    .foregroundColor(.yellow)
+                    .shadow(color: .purple.opacity(0.6), radius: 12, y: 6)
+
+                Text("All 3s — the ultimate low roll!")
+                    .font(.headline)
+                    .foregroundColor(.white.opacity(0.95))
+            }
+            .padding(40)
+            .background(
+                RoundedRectangle(cornerRadius: 22)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.purple.opacity(0.95),
+                                Color.black.opacity(0.85)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .shadow(color: .purple.opacity(0.6), radius: 20, y: 10)
+            )
+            .overlay(
+                // confetti overlay with celebratory palette
+                ConfettiView(
+                    isActive: .constant(true),
+                    intensity: 1.5,
+                    fallDuration: 4.0,
+                    colors: [.systemPurple, .systemYellow, .systemTeal, .systemPink]
+                )
+                .allowsHitTesting(false)
+            )
+        }
+        .allowsHitTesting(false)
+    }
 }
 
-// MARK: - Dice Button Component
+// MARK: - Dice Button Component (with Zero Hero glow)
 struct DiceButton: View {
     let face: Int
     let isSelected: Bool
     let size: CGFloat
     let shakeToken: Int
+    let festiveToken: Int   // >0 when Zero Hero overlay is active
     let onTap: () -> Void
     let onLongPress: () -> Void
 
     @State private var isPressed = false
+    @State private var pulse = false
 
     var body: some View {
-        DiceView(face: face, selected: isSelected, size: size, shakeToken: shakeToken)
-            .scaleEffect(isPressed ? 0.9 : 1.0)
-            .animation(.spring(response: 0.2), value: isPressed)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onTap)
-            .onLongPressGesture(
-                minimumDuration: 0.5,
-                pressing: { pressing in withAnimation { isPressed = pressing } },
-                perform: onLongPress
-            )
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Dice showing \(face == 3 ? "3, worth 0 points" : "\(face)")")
-            .accessibilityHint(isSelected ? "Selected. Tap to deselect" : "Tap to select. Long press to select all \(face)s")
-            .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        ZStack {
+            DiceView(face: face, selected: isSelected, size: size, shakeToken: shakeToken)
+                .scaleEffect(isPressed ? 0.9 : 1.0)
+                .animation(.spring(response: 0.2), value: isPressed)
+
+            // Pulsing purple-gold aura when in Zero Hero celebration
+            if festiveToken != 0 {
+                RoundedRectangle(cornerRadius: max(8, size * 0.18))
+                    .stroke(
+                        LinearGradient(
+                            colors: [Color.purple, Color.yellow, Color.purple],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 4
+                    )
+                    .padding(4)
+                    .shadow(color: .purple.opacity(0.6), radius: 10)
+                    .shadow(color: .yellow.opacity(0.5), radius: 6)
+                    .scaleEffect(pulse ? 1.06 : 0.98)
+                    .animation(
+                        .easeInOut(duration: 0.75).repeatForever(autoreverses: true),
+                        value: pulse
+                    )
+                    .onAppear { pulse = true }
+                    .onDisappear { pulse = false }
+                    .allowsHitTesting(false)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
+        .onLongPressGesture(
+            minimumDuration: 0.5,
+            pressing: { pressing in withAnimation { isPressed = pressing } },
+            perform: onLongPress
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Dice showing \(face == 3 ? "3, worth 0 points" : "\(face)")")
+        .accessibilityHint(isSelected ? "Selected. Tap to deselect" : "Tap to select. Long press to select all \(face)s")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 }
 

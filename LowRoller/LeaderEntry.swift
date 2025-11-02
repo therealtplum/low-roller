@@ -96,19 +96,7 @@ final class LeaderboardStore: ObservableObject {
         }
     }
 
-    // MARK: - Public API
-
-    /// Convenience: record an explicit result in one call.
-    func recordResult(name: String, didWin: Bool, potCents: Int = 0) {
-        if didWin { recordWinner(name: name, potCents: potCents) }
-        else { recordLoss(name: name) }
-    }
-
-    /// All losers at once (optional helper).
-    func recordMatch(winnerName: String, loserNames: [String], potCents: Int) {
-        recordWinner(name: winnerName, potCents: potCents)
-        for l in loserNames { recordLoss(name: l) }
-    }
+    // MARK: - Public API used by GameView / app flow
 
     /// Update/persist a player's bankroll (used after each match).
     func updateBankroll(name: String, bankrollCents: Int) {
@@ -129,25 +117,43 @@ final class LeaderboardStore: ObservableObject {
         sortAndSave()
     }
 
-    /// Remove everything.
-    func resetAll() {
-        entries.removeAll()
-        save()
+    /// Record a win for `name` and apply `potCents`.
+    func recordWinner(name: String, potCents: Int) {
+        let key = normalizeName(name)
+        if let i = indexOfName(key) {
+            entries[i].gamesWon += 1
+            entries[i].dollarsWonCents += max(0, potCents)
+            entries[i].currentStreak += 1
+            if entries[i].currentStreak > entries[i].longestStreak {
+                entries[i].longestStreak = entries[i].currentStreak
+            }
+            entries[i].lastWinAt = Date()
+        } else {
+            entries.append(LeaderEntry(
+                name: key,
+                gamesWon: 1,
+                dollarsWonCents: max(0, potCents),
+                longestStreak: 1,
+                currentStreak: 1,
+                lastWinAt: Date(),
+                bankrollCents: 10_000
+            ))
+        }
+        sortAndSave()
+    }
+
+    /// Record a loss for `name` (resets current streak to 0).
+    func recordLoss(name: String) {
+        let key = normalizeName(name)
+        if let i = indexOfName(key), entries[i].currentStreak != 0 {
+            entries[i].currentStreak = 0
+            sortAndSave()
+        }
     }
 
     /// Remove a single entry everywhere (by stable id).
     func removeEntry(id: UUID) {
         if let i = entries.firstIndex(where: { $0.id == id }) {
-            entries.remove(at: i)
-            save()
-        }
-    }
-
-    /// Optional convenience: remove by display name (case-insensitive).
-    func removeByName(_ name: String) {
-        let key = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return }
-        if let i = indexOfName(key) {
             entries.remove(at: i)
             save()
         }
@@ -220,7 +226,38 @@ final class LeaderboardStore: ObservableObject {
         return (metric == .balance) ? sorted : Array(sorted.prefix(10))
     }
 
-    // MARK: - Optional migration for old bug
+    // MARK: - Debug/Convenience helpers (hidden from Periphery in release)
+
+    #if DEBUG
+    // periphery:ignore
+    func recordResult(name: String, didWin: Bool, potCents: Int = 0) {
+        if didWin { recordWinner(name: name, potCents: potCents) }
+        else { recordLoss(name: name) }
+    }
+
+    // periphery:ignore
+    func recordMatch(winnerName: String, loserNames: [String], potCents: Int) {
+        recordWinner(name: winnerName, potCents: potCents)
+        for l in loserNames { recordLoss(name: l) }
+    }
+
+    // periphery:ignore
+    func resetAll() {
+        entries.removeAll()
+        save()
+    }
+
+    // periphery:ignore
+    func removeByName(_ name: String) {
+        let key = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        if let i = indexOfName(key) {
+            entries.remove(at: i)
+            save()
+        }
+    }
+
+    // periphery:ignore
     func migrateFixLongestStreakIfMirrorsWins() {
         var changed = false
         var newEntries: [LeaderEntry] = []
@@ -236,45 +273,10 @@ final class LeaderboardStore: ObservableObject {
             save()
         }
     }
+    #endif
 
-    // MARK: - Recording Methods (CHANGED FROM PRIVATE TO INTERNAL/PUBLIC)
-    
-    // FIX: Changed from 'private func' to just 'func' so GameView can access it
-    func recordWinner(name: String, potCents: Int) {
-        let key = normalizeName(name)
-        if let i = indexOfName(key) {
-            entries[i].gamesWon += 1
-            entries[i].dollarsWonCents += max(0, potCents)
-            entries[i].currentStreak += 1
-            if entries[i].currentStreak > entries[i].longestStreak {
-                entries[i].longestStreak = entries[i].currentStreak
-            }
-            entries[i].lastWinAt = Date()
-        } else {
-            entries.append(LeaderEntry(
-                name: key,
-                gamesWon: 1,
-                dollarsWonCents: max(0, potCents),
-                longestStreak: 1,
-                currentStreak: 1,
-                lastWinAt: Date(),
-                bankrollCents: 10_000
-            ))
-        }
-        sortAndSave()
-    }
+    // MARK: - Private Helper Methods
 
-    // FIX: Changed from 'private func' to just 'func' so GameView can access it
-    func recordLoss(name: String) {
-        let key = normalizeName(name)
-        if let i = indexOfName(key), entries[i].currentStreak != 0 {
-            entries[i].currentStreak = 0
-            sortAndSave()
-        }
-    }
-
-    // MARK: - Private Helper Methods (these remain private)
-    
     private func normalizeName(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "You" : trimmed
@@ -303,7 +305,7 @@ final class LeaderboardStore: ObservableObject {
     }
 
     // MARK: - Dedup / Merge Helpers (used only at init)
-    
+
     private func coalesce(_ list: [LeaderEntry]) -> [LeaderEntry] {
         var map: [String: LeaderEntry] = [:]  // key = lowercased name
         for e in list {

@@ -113,7 +113,7 @@ final class ConfettiContainer: UIView {
         cell.spin = 2
         cell.spinRange = 3
 
-        // 🔥 Bigger confetti size (was 0.5 / 0.2)
+        // Bigger confetti size (was 0.5 / 0.2)
         cell.scale = 1.0
         cell.scaleRange = 0.4
         
@@ -125,7 +125,7 @@ final class ConfettiContainer: UIView {
         if let cachedImage = Self.imageCache.object(forKey: cacheKey) {
             cell.contents = cachedImage.cgImage
         } else {
-            // 🔥 Slightly larger base image (was 10×10)
+            // Slightly larger base image (was 10×10)
             let image = Self.makeImage(color: color, shape: shape, size: CGSize(width: 16, height: 16))
             Self.imageCache.setObject(image, forKey: cacheKey, cost: 100)
             cell.contents = image.cgImage
@@ -193,41 +193,5 @@ final class ConfettiContainer: UIView {
             layer.emitterPosition = CGPoint(x: bounds.midX, y: -10)
             layer.emitterSize = CGSize(width: bounds.width, height: 1)
         }
-    }
-}
-
-// MARK: - SwiftUI Preview
-struct ConfettiView_Previews: PreviewProvider {
-    struct PreviewContainer: View {
-        @State private var showConfetti = false
-        
-        var body: some View {
-            ZStack {
-                Color.black.ignoresSafeArea()
-                
-                VStack {
-                    Button("Celebrate! 🎉") {
-                        showConfetti = true
-                        
-                        // Auto-stop after 5 seconds
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                            showConfetti = false
-                        }
-                    }
-                    .font(.title)
-                    .foregroundColor(.white)
-                    .padding()
-                    .background(Color.blue)
-                    .cornerRadius(12)
-                }
-                
-                ConfettiView(isActive: $showConfetti)
-                    .allowsHitTesting(false)
-            }
-        }
-    }
-    
-    static var previews: some View {
-        PreviewContainer()
     }
 }

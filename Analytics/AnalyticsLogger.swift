@@ -42,8 +42,7 @@ public final class AnalyticsLogger {
 
         // Defer any log that might route back through AnalyticsLogger.shared until after init
         DispatchQueue.main.async {
-            // If you keep a Log.appForegrounded() helper, you can call it here safely,
-            // or use this built-in ping to prove the logger is alive:
+            // Prove the logger is alive and generate a heartbeat
             self.healthPing()
         }
 
@@ -192,8 +191,8 @@ public final class AnalyticsLogger {
             // Always log the toggle, even if turning OFF; defer to main to avoid any chance
             // of running during static init paths.
             DispatchQueue.main.async {
-                // If you have a `Log.analyticsToggled` helper, call it; otherwise write directly:
-                self.writeEvent(name: "analytics_toggled", payload: ["enabled": AnalyticsSwitch.enabled])
+                // Use the high-level facade so Periphery sees it used.
+                Log.analyticsToggled(enabled: AnalyticsSwitch.enabled)
                 self.flushAsync()
             }
         }
@@ -204,6 +203,9 @@ public final class AnalyticsLogger {
     }
 
     @objc private func appDidEnterBackground() {
+        // Emit lifecycle via the facade so it's captured & marked used.
+        Log.appBackgrounded()
+
         // Try to complete a flush during backgrounding
         var taskID: UIBackgroundTaskIdentifier = .invalid
         taskID = UIApplication.shared.beginBackgroundTask(withName: "analytics.flush") {
@@ -222,7 +224,8 @@ public final class AnalyticsLogger {
     }
 
     @objc private func appDidBecomeActive() {
-        // Optional: emit a foreground ping using the public helper
+        // Emit lifecycle via the facade and keep the heartbeat.
+        Log.appForegrounded()
         healthPing()
         flushAsync()
     }

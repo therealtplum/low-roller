@@ -32,21 +32,6 @@ enum NameValidator {
         return !normalized.isEmpty && !reservedNames.contains(normalized)
     }
     
-    /// Get error message for invalid name
-    static func errorMessage(for name: String) -> String? {
-        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        if normalized.isEmpty {
-            return "Name cannot be empty"
-        }
-        
-        if !isValidName(normalized) {
-            return "Sorry, that name is taken! Please choose another."
-        }
-        
-        return nil
-    }
-    
     /// Clean a name and return a valid version
     static func sanitizeName(_ name: String, fallback: String = "Player") -> String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)

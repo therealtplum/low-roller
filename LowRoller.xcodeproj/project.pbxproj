@@ -29,6 +29,7 @@
 				AnalyticsExportView.swift,
 				AnalyticsLogger.swift,
 				AnalyticsSwitch.swift,
+				EventBus.swift,
 				Log.swift,
 			);
 			target = C4AA42DA2EAED8FB005D9286 /* LowRollerTests */;
@@ -40,6 +41,7 @@
 				AnalyticsExportView.swift,
 				AnalyticsLogger.swift,
 				AnalyticsSwitch.swift,
+				EventBus.swift,
 				Log.swift,
 			);
 			target = C48478902EA8FC1E00AE9CBD /* LowRoller */;

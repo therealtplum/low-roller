@@ -2,40 +2,27 @@
 //  EconomyStore.swift
 //  LowRoller
 //
-//  Persists the House balance across launches using UserDefaults,
-//  logs an auditable ledger of credits/debits for the House, and
-//  exposes helpers you can call when player banks change.
-//
-//  NOTES:
-//  - Logging for borrow penalties, buy-ins, and match payouts is centralized HERE.
-//    Do not also log those in GameEngine or UI layers.
-//  - A lightweight dedupe prevents identical events (same type, player, reason,
-//    amount, matchId) from being emitted twice within a short window.
-//
 
 import Foundation
 import Combine
 
 final class EconomyStore: ObservableObject {
-    // MARK: - Singleton
     static let shared = EconomyStore()
 
-    // MARK: - Persistence Keys
     private let houseKey  = "economy.house.cents.v1"
     private let seededKey = "economy.seeded.v1"
 
-    // MARK: - Published state
     @Published private(set) var houseCents: Int = 0
 
     private let defaults = UserDefaults.standard
     private var cancellables = Set<AnyCancellable>()
 
-    // MARK: - Init
+    // EventBus
+    private let bus = EventBus.shared
+
     private init() {
         seedIfNeeded()
         houseCents = defaults.integer(forKey: houseKey)
-
-        // Persist on change
         $houseCents
             .sink { [weak self] newVal in
                 guard let self else { return }
@@ -46,128 +33,179 @@ final class EconomyStore: ObservableObject {
 
     private func seedIfNeeded() {
         if defaults.object(forKey: seededKey) == nil {
-            // Start House at 0 by default
             defaults.set(true, forKey: seededKey)
             defaults.set(0, forKey: houseKey)
         }
     }
 
-    // MARK: - Lightweight idempotency for log events
+    // MARK: - Lightweight idempotency for legacy Log.* echo
 
-    /// Short window to drop perfect duplicate events (type+player+reason+amount+matchId).
     private let dedupeWindow: TimeInterval = 1.0
     private var recentFingerprints: [String: Date] = [:]
     private let recentLock = NSLock()
 
-    private func makeFingerprint(
-        type: String,
-        player: String?,
-        reason: String,
-        amountCents: Int,
-        matchId: UUID?
-    ) -> String {
-        // String that uniquely identifies a logical event
+    private func makeFingerprint(type: String, player: String?, reason: String, amountCents: Int, matchId: UUID?) -> String {
         let pid = player ?? "-"
         let mid = matchId?.uuidString ?? "-"
         return "\(type)|\(pid)|\(reason)|\(amountCents)|\(mid)"
     }
 
-    private func shouldEmit(
-        type: String,
-        player: String?,
-        reason: String,
-        amountCents: Int,
-        matchId: UUID?
-    ) -> Bool {
+    private func shouldEmitLegacy(type: String, player: String?, reason: String, amountCents: Int, matchId: UUID?) -> Bool {
         let fp = makeFingerprint(type: type, player: player, reason: reason, amountCents: amountCents, matchId: matchId)
         let now = Date()
-
-        recentLock.lock()
-        defer { recentLock.unlock() }
-
-        if let firstSeen = recentFingerprints[fp], now.timeIntervalSince(firstSeen) < dedupeWindow {
-            // Duplicate within window — drop it
-            return false
-        }
+        recentLock.lock(); defer { recentLock.unlock() }
+        if let first = recentFingerprints[fp], now.timeIntervalSince(first) < dedupeWindow { return false }
         recentFingerprints[fp] = now
         return true
     }
 
-    // MARK: - Centralized logging wrappers (use these to emit)
+    // MARK: - EventBus posting
 
-    private func emitHouseCredited(_ cents: Int, reason: String, matchId: UUID?) {
-        guard cents > 0 else { return }
-        guard shouldEmit(type: "house_credited", player: nil, reason: reason, amountCents: cents, matchId: matchId) else { return }
-        Log.houseCredited(amountCents: cents, reason: reason, matchId: matchId)
+    private func newJournalId() -> String { UUID().uuidString }
+    private func newTxnId() -> String { UUID().uuidString }
+
+    private func post(matchIdString: String,
+                      journalId: String,
+                      account: String,
+                      direction: String,
+                      amountCents: Int,
+                      reason: String,
+                      memo: String? = nil) {
+        let payload = BankPostedPayload(
+            journalId: journalId,
+            txnId: newTxnId(),
+            account: account,
+            direction: direction,
+            amountCents: amountCents,
+            reason: reason,
+            relatedMatchId: matchIdString,
+            memo: memo
+        )
+        bus.emit(.bank_posted, matchId: matchIdString, body: payload)
     }
 
-    private func emitHouseDebited(_ cents: Int, reason: String, matchId: UUID?) {
-        guard cents > 0 else { return }
-        guard shouldEmit(type: "house_debited", player: nil, reason: reason, amountCents: cents, matchId: matchId) else { return }
-        Log.houseDebited(amountCents: cents, reason: reason, matchId: matchId)
-    }
+    // MARK: - House mutations
 
-    private func emitPlayerDebited(_ player: String, cents: Int, reason: String, matchId: UUID?) {
-        guard cents > 0 else { return }
-        guard shouldEmit(type: "bank_debited", player: player, reason: reason, amountCents: cents, matchId: matchId) else { return }
-        Log.bankDebited(player: player, amountCents: cents, reason: reason, matchId: matchId)
-    }
-
-    private func emitPlayerCredited(_ player: String, cents: Int, reason: String, matchId: UUID?) {
-        guard cents > 0 else { return }
-        guard shouldEmit(type: "bank_credited", player: player, reason: reason, amountCents: cents, matchId: matchId) else { return }
-        Log.bankCredited(player: player, amountCents: cents, reason: reason, matchId: matchId)
-    }
-
-    // MARK: - House mutations (with centralized logging)
-
-    /// Credit (increase) House balance. Also logs `house_credited`.
-    func creditHouse(_ cents: Int, reason: String, matchId: UUID? = nil) {
+    func creditHouse(_ cents: Int,
+                     reason: String,
+                     matchId: UUID? = nil,
+                     journalId: String? = nil,
+                     matchIdString: String? = nil,
+                     houseAccount: String = "house:pot") {
         guard cents > 0 else { return }
         houseCents &+= cents
-        emitHouseCredited(cents, reason: reason, matchId: matchId)
-    }
 
-    /// Debit (decrease) House balance. Also logs `house_debited`.
-    func debitHouse(_ cents: Int, reason: String, matchId: UUID? = nil) {
-        guard cents > 0 else { return }
-        houseCents &-= cents
-        emitHouseDebited(cents, reason: reason, matchId: matchId)
-    }
+        // Legacy (only if we have a concrete match UUID to avoid deprecation)
+        if let mid = matchId,
+           shouldEmitLegacy(type: "house_credited", player: nil, reason: reason, amountCents: cents, matchId: mid) {
+            Log.houseCredited(amountCents: cents, reason: reason, matchId: mid)
+        }
 
-    // MARK: - High-level economic events (one-stop APIs)
-
-    /// Use this when a player pays a penalty/fee to the House.
-    /// Records a House credit and a player debit event for auditability.
-    func recordBorrowPenalty(playerName: String?,
-                             cents: Int,
-                             matchId: UUID? = nil) {
-        guard cents > 0 else { return }
-        creditHouse(cents, reason: "borrow_penalty", matchId: matchId)
-        if let name = playerName {
-            emitPlayerDebited(name, cents: cents, reason: "borrow_penalty", matchId: matchId)
+        // EventBus
+        if let m = matchIdString {
+            let j = journalId ?? newJournalId()
+            post(matchIdString: m, journalId: j, account: houseAccount, direction: "credit", amountCents: cents, reason: reason)
         }
     }
 
-    /// Use this when House pays out a pot to the winner.
+    func debitHouse(_ cents: Int,
+                    reason: String,
+                    matchId: UUID? = nil,
+                    journalId: String? = nil,
+                    matchIdString: String? = nil,
+                    houseAccount: String = "house:pot") {
+        guard cents > 0 else { return }
+        houseCents &-= cents
+
+        if let mid = matchId,
+           shouldEmitLegacy(type: "house_debited", player: nil, reason: reason, amountCents: cents, matchId: mid) {
+            Log.houseDebited(amountCents: cents, reason: reason, matchId: mid)
+        }
+
+        if let m = matchIdString {
+            let j = journalId ?? newJournalId()
+            post(matchIdString: m, journalId: j, account: houseAccount, direction: "debit", amountCents: cents, reason: reason)
+        }
+    }
+
+    // MARK: - High-level economic events
+
+    func recordBorrowPenalty(playerName: String?,
+                             cents: Int,
+                             matchId: UUID? = nil,
+                             matchIdString: String? = nil) {
+        guard cents > 0 else { return }
+        let j = newJournalId()
+
+        creditHouse(cents, reason: "borrow_penalty", matchId: matchId, journalId: j, matchIdString: matchIdString, houseAccount: "house:penalties")
+
+        if let name = playerName {
+            if let mid = matchId,
+               shouldEmitLegacy(type: "bank_debited", player: name, reason: "borrow_penalty", amountCents: cents, matchId: mid) {
+                Log.bankDebited(player: name, amountCents: cents, reason: "borrow_penalty", matchId: mid)
+            }
+            if let m = matchIdString {
+                post(matchIdString: m, journalId: j, account: "player:\(name)", direction: "debit", amountCents: cents, reason: "borrow_penalty")
+            }
+        }
+    }
+
     func recordMatchPayout(toWinner winnerName: String,
                            amountCents: Int,
-                           matchId: UUID) {
+                           matchId: UUID,
+                           matchIdString: String) {
         guard amountCents > 0 else { return }
-        debitHouse(amountCents, reason: "match_payout", matchId: matchId)
-        emitPlayerCredited(winnerName, cents: amountCents, reason: "match_win", matchId: matchId)
+        let j = newJournalId()
+
+        debitHouse(amountCents, reason: "match_payout", matchId: matchId, journalId: j, matchIdString: matchIdString, houseAccount: "house:pot")
+
+        if shouldEmitLegacy(type: "bank_credited", player: winnerName, reason: "match_win", amountCents: amountCents, matchId: matchId) {
+            Log.bankCredited(player: winnerName, amountCents: amountCents, reason: "match_win", matchId: matchId)
+        }
+        post(matchIdString: matchIdString, journalId: j, account: "player:\(winnerName)", direction: "credit", amountCents: amountCents, reason: "match_win")
     }
 
-    /// Use this when buy-ins go **to the House** (if you model it that way).
     func recordBuyIn(fromPlayer playerName: String,
                      amountCents: Int,
-                     matchId: UUID? = nil) {
+                     matchId: UUID? = nil,
+                     matchIdString: String? = nil,
+                     journalId: String? = nil) {
         guard amountCents > 0 else { return }
-        creditHouse(amountCents, reason: "buy_in", matchId: matchId)
-        emitPlayerDebited(playerName, cents: amountCents, reason: "buy_in", matchId: matchId)
+        let j = journalId ?? newJournalId()
+
+        creditHouse(amountCents, reason: "buy_in", matchId: matchId, journalId: j, matchIdString: matchIdString, houseAccount: "house:pot")
+
+        if let mid = matchId,
+           shouldEmitLegacy(type: "bank_debited", player: playerName, reason: "buy_in", amountCents: amountCents, matchId: mid) {
+            Log.bankDebited(player: playerName, amountCents: amountCents, reason: "buy_in", matchId: mid)
+        }
+        if let m = matchIdString {
+            post(matchIdString: m, journalId: j, account: "player:\(playerName)", direction: "debit", amountCents: amountCents, reason: "buy_in")
+        }
     }
 
-    /// Resets House to 0 and logs a special event so you can see it in the ledger.
+    func recordBuyInsBatch(players: [(name: String, cents: Int)],
+                           matchId: UUID? = nil,
+                           matchIdString: String) {
+        let j = newJournalId()
+        for (name, cents) in players where cents > 0 {
+            recordBuyIn(fromPlayer: name, amountCents: cents, matchId: matchId, matchIdString: matchIdString, journalId: j)
+        }
+    }
+
+    func collectRake(fromPotCents pot: Int,
+                     pct: Double,
+                     matchId: UUID? = nil,
+                     matchIdString: String) -> Int {
+        let rake = Int((Double(pot) * pct).rounded())
+        guard rake > 0 else { return 0 }
+        let j = newJournalId()
+
+        debitHouse(rake, reason: "rake", matchId: matchId, journalId: j, matchIdString: matchIdString, houseAccount: "house:pot")
+        creditHouse(rake, reason: "rake", matchId: matchId, journalId: j, matchIdString: matchIdString, houseAccount: "house:rake")
+        return rake
+    }
+
     func resetHouse() {
         let old = houseCents
         houseCents = 0

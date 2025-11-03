@@ -1211,3 +1211,8 @@ struct ShakeEffect: GeometryEffect {
     }
 }
 
+
+#if DEBUG
+// periphery:ignore - force a reference in debug builds
+private let _peripheryUse_DiceChaosView_Game: Any = DiceChaosView.self
+#endif

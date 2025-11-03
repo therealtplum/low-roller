@@ -105,6 +105,7 @@ final class GameEngine: ObservableObject {
         emitTurnStarted()
     }
 
+// periphery:ignore - PreGameView handoff
     convenience init(players: [Player], youStart: Bool) {
         let tmp = LeaderboardStore()
         self.init(players: players, youStart: youStart, leaders: tmp)
@@ -394,6 +395,7 @@ final class GameEngine: ObservableObject {
         for i in state.players.indices { state.players[i].picks.removeAll() }
     }
 
+// periphery:ignore - rematch flow
     func resetForNewMatch() {
         state.remainingDice = 7
         state.lastFaces = []
@@ -427,6 +429,7 @@ final class GameEngine: ObservableObject {
         }
     }
 
+// periphery:ignore - turn timer callback
     func onTimeout() { handleTurnTimeout() }
 
     // MARK: - Bot-like picking

@@ -1,3 +1,5 @@
+// periphery:ignore:all - analytics façade; wiring in progress
+
 //
 //  Log.swift
 //  LowRoller

@@ -719,6 +719,12 @@ struct GameView: View {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             if humanWon {
+                // 🔽 NEW: match-level zero-game Easter egg (even if no "all 3s" round happened)
+                if let human = engine.state.players.first(where: { !$0.isBot }),
+                   human.totalScore == 0 {
+                    triggerZeroHero()
+                }
+
                 showConfetti = true
                 notificationFeedback.notificationOccurred(.success)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 5) {

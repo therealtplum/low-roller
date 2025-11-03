@@ -142,6 +142,12 @@ Path	Description
 /host/	Axum WebSocket scaffold for multiplayer rooms
 
 
+## 🕹️ Screenshots
+
+| Lobby | Gameplay | Sudden Death |
+|:--:|:--:|:--:|
+| ![PreGameView](assets/pregame.jpeg) | ![GameView1](assets/gameplay1.jpeg) | ![GameView2](assets/gameplay2.jpeg) |
+
 ⸻
 
 👤 Author

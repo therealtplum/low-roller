@@ -100,8 +100,7 @@ struct GameView: View {
         }
         .onChange(of: engine.state.turnIdx) { _, _ in
             botController?.scheduleBotIfNeeded()
-            ensureTimerForCurrentTurn()   // ← was resetTimer()
-            // New round for whoever's turn it is now
+            ensureTimerForCurrentTurn()
             zeroRoundAllThrees = true
         }
         .onChange(of: engine.state.phase) { oldPhase, newPhase in
@@ -703,7 +702,6 @@ struct GameView: View {
     
     // periphery:ignore - wired from Roll/Pick soon
     // Keep old signature; now delegates to the unified helper.
-    private func resetTimer() { ensureTimerForCurrentTurn() }
     
     private func handleTimeout() {
         if !(currentPlayer?.isBot ?? false) {

@@ -152,6 +152,7 @@ final class EconomyStore: ObservableObject {
         }
     }
 
+// periphery:ignore - called on match finalize
     func recordMatchPayout(toWinner winnerName: String,
                            amountCents: Int,
                            matchId: UUID,

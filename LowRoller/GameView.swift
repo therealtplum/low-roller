@@ -700,6 +700,7 @@ struct GameView: View {
         RunLoop.main.add(timer!, forMode: .common)
     }
 
+    // periphery:ignore - wired from Roll/Pick soon
     // Keep old signature; now delegates to the unified helper.
     private func resetTimer() { ensureTimerForCurrentTurn() }
 

@@ -144,9 +144,9 @@ Path	Description
 
 ## 🕹️ Screenshots
 
-| Lobby | Gameplay | Sudden Death |
-|:--:|:--:|:--:|
-| ![PreGameView](assets/pregame.jpeg) | ![GameView1](assets/gameplay1.jpeg) | ![GameView2](assets/gameplay2.jpeg) |
+![Lobby](LowRoller/assets/PreGameView.jpeg)
+![Gameplay](LowRoller/assets/GameView1.jpeg)
+![Sudden Death](LowRoller/assets/GameView2.jpeg)
 
 ⸻
 
